@@ -14,6 +14,10 @@ from scipy import ndimage
 RES = 0.10            # metres per cell of the pavement map
 GAP = 45.0            # longest stretch of hidden road carried across, metres
 DIRECTIONS = 48       # line directions tried when carrying a road across a gap
+BAY = 30.0            # longest bite a crown takes out of a road's edge that is filled, metres
+EDGE_REACH = 4.0      # how far from pavement already found a filled bite may reach
+ALONG = 10.0          # degrees a bite's own direction may differ from the edge it is filled along
+EDGE_BLUR = 6.0       # metres over which the direction of an edge is taken
 SMOOTH = 0.5          # metres of blur that turn the photo's ragged edge into a clean outline
 NOTCH = 2.4           # metres: a bite into the pavement narrower than this is filled
 BUMP = 2.0            # metres: a tongue of pavement narrower than this is trimmed off
@@ -59,6 +63,7 @@ def visible(photo, raster, covered_cells, blocked_cells, cell, shadow=None):
     k = int(round(RES / raster["res"]))
     H, W = photo.shape[0] // k, photo.shape[1] // k
     paved = np.zeros((H, W), bool)
+    planted = np.zeros((H, W), bool)
     for r0 in range(0, H, 512):
         r1 = min(r0 + 512, H)
         block = np.asarray(photo[r0 * k:r1 * k, :W * k], dtype=np.float32).reshape(r1 - r0, k, W, k, 3).mean((1, 3)) / 255
@@ -66,6 +71,8 @@ def visible(photo, raster, covered_cells, blocked_cells, cell, shadow=None):
         sat = (mx - mn) / np.maximum(mx, 1e-3)
         # Sunlit concrete is bright and grey.
         paved[r0:r1] = (sat < 0.17) & (mx > 0.22)
+        # Green or dried to straw: either way blue is well below the other two.
+        planted[r0:r1] = (sat > 0.22) & (block[..., 1] >= 0.85 * block[..., 0]) & (block[..., 1] > 1.08 * block[..., 2])
         if shadow is not None:
             # Relit, shaded concrete comes out pale and a little blue, where relit grass comes
             # out yellow-green. Blue is the largest channel on the one and the smallest on the other.
@@ -77,19 +84,26 @@ def visible(photo, raster, covered_cells, blocked_cells, cell, shadow=None):
     # footprint of a parked car), and drop grey odds and ends that are not part of the network.
     paved = ndimage.binary_closing(paved, structure=_disc(0.3 / RES))
     holes = ndimage.binary_fill_holes(paved) & ~paved
-    paved |= holes & ~_drop_small(holes, 40.0, RES)
+    labels, count = ndimage.label(holes)
+    index = np.arange(1, count + 1)
+    area = ndimage.sum(holes, labels, index) * RES * RES
+    green = ndimage.sum(planted, labels, index) * RES * RES
+    # A hole is filled when it is small, unless it is mostly grass and bigger than a weed:
+    # that is an island in a car park, and it is not pavement.
+    fill_it = (area < 40.0) & ((area < 3.0) | (green < 0.5 * area))
+    paved |= np.concatenate([[False], fill_it])[labels]
     paved = ndimage.binary_opening(paved, structure=_disc(0.4 / RES))
     return _drop_small(paved, 60.0, RES)
 
 
-def carry_across(paved_cells, hidden_cells, cell):
+def carry_across(paved_cells, hidden_cells, cell, gap=None):
     """Cells of hidden ground that lie on a straight line between two stretches of pavement.
 
     For each of DIRECTIONS line directions the maps are turned so the lines are rows. In a row,
-    a run of hidden cells is filled when it has pavement on both ends and is short enough.
+    a run of hidden cells is filled when it has pavement on both ends and is no longer than gap.
     """
     state = np.where(paved_cells, 1, np.where(hidden_cells, 2, 0)).astype(np.uint8)
-    limit = GAP / cell
+    limit = (GAP if gap is None else gap) / cell
     filled = np.zeros(state.shape, np.float32)
     for angle in np.arange(DIRECTIONS) * 180.0 / DIRECTIONS:
         rot = ndimage.rotate(state, angle, order=0, reshape=True, mode="constant", cval=0)
@@ -109,6 +123,38 @@ def carry_across(paved_cells, hidden_cells, cell):
     return (filled > 0.5) & hidden_cells
 
 
+def straighten(paved_cells, hidden_cells, cell):
+    """Hidden cells that lie in a bite out of a road's edge, to be counted as pavement.
+
+    A hedge along a road hides its edge in stretches, each crown taking a bite out of the
+    pavement the photo shows. Between two crowns the true edge is in view, and a road's edge is
+    straight from one such glimpse to the next. So along each direction in turn, a run of
+    hidden cells up to BAY long with pavement at both ends is filled, but only where that
+    direction is the direction of the edge right there. Without that last condition the same
+    rule would join two parallel roads through the trees between them.
+    """
+    # Which way the edge runs near each cell: at right angles to the slope of the blurred map.
+    # Blurred widely, so that the bites themselves do not turn it.
+    soft = ndimage.gaussian_filter(paved_cells.astype(np.float32), EDGE_BLUR / cell)
+    down, right = np.gradient(soft)
+    edge = np.degrees(np.arctan2(right, down)) % 180.0      # measured as on a map drawn north up
+    near = ndimage.binary_dilation(paved_cells, structure=_disc(EDGE_REACH / cell)) & hidden_cells & ~paved_cells
+    length = int(round(BAY / cell))
+    found = np.zeros(paved_cells.shape, bool)
+    solid = paved_cells.astype(np.uint8)
+    for angle in np.arange(DIRECTIONS) * 180.0 / DIRECTIONS:
+        # Turned by this angle, lines that ran at minus this angle on the map now run along rows.
+        along = np.abs((edge + angle + 90.0) % 180.0 - 90.0) < ALONG
+        if not (near & along).any():
+            continue
+        rot = ndimage.rotate(solid, angle, order=0, reshape=True, mode="constant", cval=0)
+        closed = ndimage.minimum_filter1d(ndimage.maximum_filter1d(rot, length, axis=1), length, axis=1)
+        back = ndimage.rotate(closed, -angle, order=0, reshape=True, mode="constant", cval=0)
+        r0, c0 = (back.shape[0] - solid.shape[0]) // 2, (back.shape[1] - solid.shape[1]) // 2
+        found |= (back[r0:r0 + solid.shape[0], c0:c0 + solid.shape[1]] > 0) & near & along
+    return found
+
+
 def build(photo, raster, masks, hidden_cells, blocked_cells, shadow=None, log=print):
     """Return (signed distance in metres on RES cells, the pavement mask on RES cells).
 
@@ -124,6 +170,7 @@ def build(photo, raster, masks, hidden_cells, blocked_cells, shadow=None, log=pr
     # keeps the strip under a crown that overhangs a road's edge, and drops thin stray links
     # between two roads through the woods.
     carried &= ndimage.binary_opening(seen_cells | carried, structure=_disc(1.5 / cell))
+    carried |= straighten(seen_cells | carried, hidden_cells, cell)
     paved = seen | to_fine(carried, seen.shape, cell)
     # A road's edge does not have bites in it. Fill any notch narrower than NOTCH.
     paved = ndimage.binary_closing(paved, structure=_disc(NOTCH / 2 / RES))

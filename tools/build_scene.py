@@ -51,6 +51,7 @@ def main():
     parser.add_argument("--levels", default="low,standard")
     parser.add_argument("--scan", default=None, help="the scan directory, needed to read wall colours")
     parser.add_argument("--chrono-data", default=None, help="Chrono's data directory, for the cone model (default: ask the installed PyChrono)")
+    parser.add_argument("--save-photo", action="store_true", help="also write the finished ground photo and the pavement map to WORK_DIR, for audit_ground.py")
     parser.add_argument("--keep-shadows", action="store_true", help="publish the photo with its shadows still in")
     args = parser.parse_args()
     start = time.perf_counter()
@@ -62,6 +63,9 @@ def main():
 
     filled, matched, found_cones, masks, edge = groundphoto.prepare(args.work, ref, raster, deshadow=not args.keep_shadows)
     print(f"[{time.perf_counter() - start:5.1f} s] ground photo ready")
+    if args.save_photo:
+        np.save(os.path.join(args.work, "ground_photo.npy"), filled)
+        np.save(os.path.join(args.work, "pavement.npy"), edge.distance > 0)
 
     os.makedirs(os.path.join(args.scene, "textures"), exist_ok=True)
     tiles.save_texture(matched, os.path.join(args.scene, "textures", "surround.jpg"))
@@ -109,7 +113,15 @@ def main():
     k = int(round(cell / raster["res"]))
     h, w = obj["height"].shape
     small = np.stack([np.asarray(raw[..., ch], dtype=np.float32)[:h * k, :w * k].reshape(h, k, w, k).mean((1, 3)) for ch in range(3)], -1)
-    library, placements = forest.plan(measured, obj["crowns"], obj["height"], small, objects.water(ref, gx, gy), masks["paved"], obj["buildings"],
+    # A building is drawn as the rectangle fitted to it, which covers more ground than its roof
+    # did where the real plan is an L. Trees keep out of the rectangle, with a metre to spare.
+    footprints = obj["buildings"].copy()
+    for b in found:
+        u = np.array(b["axis"])
+        along = (gx - b["centre"][0]) * u[0] + (gy - b["centre"][1]) * u[1]
+        across = -(gx - b["centre"][0]) * u[1] + (gy - b["centre"][1]) * u[0]
+        footprints |= (np.abs(along) < b["half_length"] + 1.0) & (np.abs(across) < b["half_width"] + 1.0)
+    library, placements = forest.plan(measured, obj["crowns"], obj["height"], small, objects.water(ref, gx, gy), masks["paved"], footprints,
                                       (float(obj["x0"]), float(obj["y1"]), cell), ref)
     os.makedirs(os.path.join(args.scene, "trees"), exist_ok=True)
     used = {p["model"] for p in placements}

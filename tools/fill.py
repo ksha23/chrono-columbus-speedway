@@ -54,14 +54,15 @@ def find_grain(photo, raster, usable_cells, cell, want):
     return np.concatenate([top, top[::-1]], axis=0)
 
 
-def repaint(photo, raster, mask_cells, known_cells, paved_cells, grains, cell):
+def repaint(photo, raster, mask_cells, known_cells, paved_cells, grains, cell, solid=None):
     """Return the photo with mask_cells repainted as ground.
 
     The *_cells are boolean on the low-resolution grid of size cell. known_cells is the open
     ground whose colour may be carried into the patches, paved_cells where the pavement is,
     hidden parts included. Pavement is repainted from pavement and everything else from
     everything else, so a road keeps its edge where a crown hung over it. grains is the pair of
-    grain tiles from find_grain, grass then pavement.
+    grain tiles from find_grain, grass then pavement. solid, if given, marks cells where the
+    photo has nothing at all: there the paint goes on at full strength, with no feathering.
     """
     k = int(round(cell / raster["res"]))
     H, W = photo.shape[:2]
@@ -71,6 +72,8 @@ def repaint(photo, raster, mask_cells, known_cells, paved_cells, grains, cell):
     paved_like = paved_cells.astype(np.float32)
 
     soft = np.clip(ndimage.gaussian_filter(ndimage.binary_dilation(mask_cells, iterations=1).astype(np.float32), FEATHER / cell) * 1.6, 0, 1)
+    if solid is not None:
+        soft = np.maximum(soft, ndimage.binary_dilation(solid, iterations=1).astype(np.float32))
     out = np.array(photo)
     period = grains[0].shape[0]
     cols = np.arange(W) % period
@@ -155,7 +158,7 @@ def _sunlit_grain(photo, raster, cells, cell, fleck):
     return float(np.median(sizes)) if sizes else 4.0
 
 
-def _flatten(band, weight, tone, fleck, grain, res):
+def _flatten(band, weight, tone, fleck, grain, res, texture=None, keep=1.0):
     """Inside a shadow, swap everything coarser than fleck for the sunlit tone. In place.
 
     Sun through leaves also leaves a lacework of sharp edges finer than fleck. Where the fine
@@ -165,11 +168,24 @@ def _flatten(band, weight, tone, fleck, grain, res):
     coarse = np.stack([ndimage.gaussian_filter(band[..., ch], fleck / res) for ch in range(3)], -1)
     detail = band - coarse
     rough = np.sqrt(ndimage.gaussian_filter((detail ** 2).mean(-1), 0.4 / res))
-    calm = np.minimum(1.0, 1.4 * grain / np.maximum(rough, 1e-3))
-    band += weight[..., None] * (tone + detail * calm[..., None] - band)
+    # keep says how much of the fine detail survives at most. On pavement it is none: the
+    # shadow of a twig and a crack in the concrete cannot be told apart, and a clean patch is
+    # better than the ghost of a tree.
+    calm = keep * np.minimum(1.0, 1.4 * grain / np.maximum(rough, 1e-3))
+    # Yellow paint is strong fine detail too, and has to stay. Nothing a shadow leaves behind is
+    # that colour: red and green well above blue.
+    paint = np.clip(((band[..., 0] + band[..., 1]) / 2 - band[..., 2] - 0.12 * band.max(-1)) / (0.08 * np.maximum(band.max(-1), 1.0)), 0, 1)
+    calm = np.maximum(calm, ndimage.maximum_filter(paint, 3))[..., None]
+    # What is turned down is made up with grain borrowed from clean ground of the same kind, so
+    # a levelled patch is not smoother than the ground around it.
+    filler = 0.0 if texture is None else texture * (1.0 - calm)
+    band += weight[..., None] * (tone + detail * calm + filler - band)
 
 
-def even_out(photo, raster, shadow, known_cells, paved_cells, water_cells, cell, paved_fine):
+KEEP = {"paved": 0.0, "land": 1.0, "water": 1.0}    # how much fine detail a levelled patch keeps
+
+
+def even_out(photo, raster, shadow, known_cells, paved_cells, water_cells, cell, paved_fine, grains=None, before=None):
     """Level what is left of a shadow after relighting, and return the result.
 
     Relighting multiplies a shadow back up, which is right for a shadow with a clean edge and
@@ -181,7 +197,10 @@ def even_out(photo, raster, shadow, known_cells, paved_cells, water_cells, cell,
 
     shadow is the full-size matte, 0 to 255. paved_fine is the pavement map at twice the
     photo's pixel size, which puts the line between the pavement's treatment and the grass's
-    exactly on the pavement's edge.
+    exactly on the pavement's edge. grains is the pair of grain tiles from find_grain, grass
+    then pavement, used to make up the texture the second pass takes out. before is the photo
+    as it was ahead of relighting: relighting also brightens a fringe around each shadow that
+    the matte does not cover, and comparing the two shows where.
     """
     k = int(round(cell / raster["res"]))
     res = raster["res"]
@@ -192,19 +211,30 @@ def even_out(photo, raster, shadow, known_cells, paved_cells, water_cells, cell,
 
     small = np.stack([cells(photo[..., ch]) for ch in range(3)], -1)
     amount = cells(shadow) / 255.0
-    sunlit = known_cells & (ndimage.maximum_filter(amount, 5) < 0.04)
+    if before is not None:
+        was = np.stack([cells(before[..., ch]) for ch in range(3)], -1)
+        amount = np.maximum(amount, np.clip(np.abs(small - was).max(-1) / 12.0, 0, 1))
+    # The reference is ground well clear of any shadow. Right beside one, relighting leaves a
+    # pale rim, and a tone taken from there would make every levelled patch too bright.
+    sunlit = known_cells & (ndimage.maximum_filter(amount, 2 * int(round(2.0 / cell)) + 1) < 0.02)
     kinds = {"paved": paved_cells, "water": water_cells & ~paved_cells, "land": ~paved_cells & ~water_cells}
-    tones, grains = {}, {}
+    textures = {"paved": None, "land": None, "water": None} if grains is None else {"paved": grains[1], "land": grains[0], "water": None}
+    tones, levels = {}, {}
     ratio = np.ones_like(small)
     for name, kind in kinds.items():
         tones[name] = carry_colour(small, sunlit & kind)
-        grains[name] = _sunlit_grain(photo, raster, sunlit & kind, cell, FLECK[name])
+        levels[name] = _sunlit_grain(photo, raster, sunlit & kind, cell, FLECK[name])
         here = known_cells & kind
         local, seen = _blur_over(small, here, 0.5 / cell)
         ok = here & (seen > 0.2)
         ratio[ok] = tones[name][ok] / np.maximum(local[ok], 4.0)
     ratio = np.clip(ratio, 0.5, 2.5)
-    weight = np.clip(ndimage.gaussian_filter(np.clip(amount * 2.0, 0, 1), 1.0) * 1.3, 0, 1) * known_cells
+    # Where sun came through leaves the matte is faint, and that fringe needs the treatment as
+    # much as the middle does. So the weight is full wherever there was any real shadow.
+    # The treated area reaches three quarters of a metre past it as well: a shadow's last
+    # fingers are thinner than the matte can follow.
+    reach = ndimage.maximum_filter(np.clip(amount * 4.0, 0, 1), 2 * int(round(0.75 / cell)) + 1)
+    weight = np.clip(ndimage.gaussian_filter(reach, 2.0) * 1.5, 0, 1) * known_cells
     gain = 1.0 + weight[..., None] * (ratio - 1.0)
 
     def enlarge(a, rows, size):
@@ -231,6 +261,8 @@ def even_out(photo, raster, shadow, known_cells, paved_cells, water_cells, cell,
             wt = enlarge(weight, rows, size)[cut] * on_road if name == "paved" else enlarge(weight * soft[name], rows, size)[cut] * ~on_road
             if (wt > 0.01).any():
                 tone = np.stack([enlarge(tones[name][..., ch], rows, size) for ch in range(3)], -1)[cut]
-                _flatten(band, wt, tone, FLECK[name], grains[name], res)
+                tile = textures[name]
+                texture = None if tile is None else tile[(np.arange(r0, r1) % tile.shape[0])[:, None], (np.arange(w * k) % tile.shape[1])[None, :]]
+                _flatten(band, wt, tone, FLECK[name], levels[name], res, texture, KEEP[name])
         out[r0:r1, :w * k] = np.clip(band + 0.5, 0, 255).astype(np.uint8)
     return out

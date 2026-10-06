@@ -10,7 +10,7 @@
 # OUT_DIR        where the archives and SHA256SUMS are written
 #
 # PYTHON picks the interpreter. It needs numpy, scipy, Pillow and, for the cone model, PyChrono.
-# Peak memory is about 15 GB, in the shadow step. The whole run takes 13 minutes on an M4 Pro.
+# Peak memory is about 15 GB, in the shadow step. The whole run takes 16 minutes on an M4 Pro.
 # Every step is seeded, so the same scan and reference data give the same archive, byte for byte.
 set -e
 scan="${1:?scan directory}"; ref="${2:?reference directory}"; work="${3:?work directory}"
@@ -28,5 +28,7 @@ run fit_height.py "$work" "$ref"                  # height correction, scored on
 run rasterize.py "$scan" "$work" 0.05             # photo and top surface in the scene frame
 run shadows.py "$work" "$work/shadows" --full     # photographed shadows relit
 run survey.py "$work" "$ref"                      # trees, buildings, vehicles
-run build_scene.py "$work" "$ref" "$scene" --scan "$scan" --levels low,standard
+run build_scene.py "$work" "$ref" "$scene" --scan "$scan" --levels low,standard --save-photo
+run check_scene.py "$scene"                       # trees clear of the road, cones on it, ground watertight
+run audit_ground.py "$work" "$work/audit"         # what is still dark on the pavement, for a look
 run package.py "$scene" "$out"

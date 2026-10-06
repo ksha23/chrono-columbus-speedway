@@ -27,7 +27,8 @@ def save_texture(picture, path):
 
     The conversion comes after any resizing, so averaging is done on the photo's own values.
     """
-    Image.fromarray(renderer.for_renderer(picture)).save(path, quality=JPEG_QUALITY, subsampling=1, optimize=True)
+    # Full-resolution colour: a paint line is two pixels wide, and halved colour would fade it.
+    Image.fromarray(renderer.for_renderer(picture)).save(path, quality=JPEG_QUALITY, subsampling=0, optimize=True)
 
 
 def spread(window, source):

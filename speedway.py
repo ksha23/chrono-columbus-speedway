@@ -39,7 +39,7 @@ import urllib.request
 # so a changed or truncated download fails here and not later as a half-loaded scene.
 RELEASE = "https://github.com/ksha23/chrono-columbus-speedway/releases/download/v1/"
 SCENE_URL = RELEASE + "speedway_scene_base.tar.gz"
-SCENE_SHA256 = "97a930c609ed5cb671bc2040746f01346d9939af6e01de9c5088dc9448bba1c0"
+SCENE_SHA256 = "f04eaf63d3105225cce767aa64f5777f5175448753728bf981900fc14f29c03a"
 SCENE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scene")
 
 MANIFEST = "speedway_scene.json"

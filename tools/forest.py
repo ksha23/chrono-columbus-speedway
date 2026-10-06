@@ -143,6 +143,50 @@ def off_the_road(trees, keep_out, x0, y1, cell):
     return moved
 
 
+OVERHANG = -0.3     # metres a crown may reach over pavement. Negative: it stops short of it
+BACK = 4.0          # metres a trunk may be stepped back to make room for its crown
+
+
+def clear_of_road(trees, paved, keep_out, x0, y1, cell):
+    """Keep every crown off the pavement. In place.
+
+    From above, a crown beside a road looks as if it reaches over it, and often it does. Drawn
+    that way, branches and leaves hang into the lane at windscreen height, because a generated
+    tree does not know to grow up and over a road the way a real one is pruned to. So a tree
+    whose crown would cross the pavement's edge is first stepped back from the road, up to BACK,
+    and whatever still crosses is taken off its width.
+    """
+    away = ndimage.distance_transform_edt(~paved) * cell
+    gy, gx = np.gradient(away, cell)        # rows run south, so +row is -y
+    blocked = ndimage.distance_transform_edt(~keep_out) * cell < CLEAR
+    h, w = paved.shape
+    moved = narrowed = 0
+    for t in trees:
+        width = min(t["radius"], widest_single(t["height"]))
+        start = (t["x"], t["y"])
+        for _ in range(int(BACK / 0.25)):
+            row = int(np.clip((y1 - t["y"]) / cell, 0, h - 1))
+            col = int(np.clip((t["x"] - x0) / cell, 0, w - 1))
+            if away[row, col] + OVERHANG >= width:
+                break
+            step = np.array([gx[row, col], -gy[row, col]])
+            size = np.hypot(*step)
+            if size < 0.3:      # on the ridge between two roads: nowhere better to go
+                break
+            nx, ny = float(t["x"] + 0.25 * step[0] / size), float(t["y"] + 0.25 * step[1] / size)
+            if blocked[int(np.clip((y1 - ny) / cell, 0, h - 1)), int(np.clip((nx - x0) / cell, 0, w - 1))]:
+                break           # a building is in the way
+            t["x"], t["y"] = nx, ny
+        moved += (t["x"], t["y"]) != start
+        row = int(np.clip((y1 - t["y"]) / cell, 0, h - 1))
+        col = int(np.clip((t["x"] - x0) / cell, 0, w - 1))
+        room = away[row, col] + OVERHANG
+        if room < width:
+            t["radius"] = float(max(room, 0.6))
+            narrowed += 1
+    return moved, narrowed
+
+
 def plan(trees, crowns, height, small_photo, water, paved, buildings, grid, ref, seed=0):
     """Return (library entries to generate, placements).
 
@@ -156,6 +200,7 @@ def plan(trees, crowns, height, small_photo, water, paved, buildings, grid, ref,
     trees = [t for t in split_clumps(trees, crowns, height, x0, y1, cell, rng) if t["id"] in colours]
     index, centres = palette(colours, PALETTE, rng)
     off_the_road(trees, paved | buildings, x0, y1, cell)
+    clear_of_road(trees, paved, paved | buildings, x0, y1, cell)
     by_water = ndimage.binary_dilation(water, iterations=int(round(12 / cell)))
     from_pavement = ndimage.distance_transform_edt(~paved) * cell
 

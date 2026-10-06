@@ -14,7 +14,7 @@ curl -LO https://raw.githubusercontent.com/ksha23/chrono-columbus-speedway/main/
 python speedway.py
 ```
 
-The first run downloads the scene (89 MB) into `scene/` beside the script, checks its
+The first run downloads the scene (96 MB) into `scene/` beside the script, checks its
 SHA-256 and unpacks it. Later runs start in a few seconds.
 
 Hold **W** to accelerate and **S** to brake, and hold **A** or **D** to steer. Let go and the car
@@ -87,10 +87,10 @@ works directly with `RigidTerrain::AddPatch`, and so do `speedway_road.obj` and
 ## What is in the scene
 
 ```
-speedway_scene.json    manifest: 113 assets, 1,003 placements in 5 groups
-speedway_ground.obj    the ground as one welded collision mesh, 643,826 triangles
-speedway_road.obj      the pavement's 78,424 of those triangles
-speedway_terrain.obj   the other 565,402
+speedway_scene.json    manifest: 114 assets, 1,005 placements in 5 groups
+speedway_ground.obj    the ground as one welded collision mesh, 644,162 triangles
+speedway_road.obj      the pavement's 79,708 of those triangles
+speedway_terrain.obj   the other 564,454
 ground/                the same triangles split by texture tile, with texture coordinates
 textures/standard/     ground photo at 5 cm per pixel, one JPEG per tile
 textures/low/          the same at 10 cm
@@ -148,7 +148,7 @@ To fetch the scene without the script:
 
 ```sh
 curl -LO https://github.com/ksha23/chrono-columbus-speedway/releases/download/v1/speedway_scene_base.tar.gz
-echo "97a930c609ed5cb671bc2040746f01346d9939af6e01de9c5088dc9448bba1c0  speedway_scene_base.tar.gz" | shasum -a 256 -c
+echo "f04eaf63d3105225cce767aa64f5777f5175448753728bf981900fc14f29c03a  speedway_scene_base.tar.gz" | shasum -a 256 -c
 mkdir scene && tar -xzf speedway_scene_base.tar.gz -C scene
 ```
 
@@ -181,22 +181,28 @@ That figure is the limit of the check as much as of the fit, since the imagery w
 - *Shadows.* The photographed shadows are relit and then levelled to the tone of the sunlit
   ground around them, so the renderer's own shadows are the only ones. The mosaic was flown at
   two times of day, around midday and mid-afternoon by the shadow directions, and each half is
-  treated with its own sun.
-- *Cones.* 123 traffic cones are found by colour on the pavement, painted out together with
+  treated with its own sun. The thin shadows of light poles, posts and fences are not in the
+  scan's heights at all, so they are found in the picture as straight dark lines and painted
+  out separately.
+- *Cones.* 124 traffic cones are found by colour on the pavement, painted out together with
   their shadows, and stood back up as models at the same spots. A cone's height comes from the
   length of the shadow it cast.
 - *Trees and buildings.* Whatever stands more than 1.5 m above the lidar ground is a tree or a
-  building. The picture of its top is painted over with the ground around it.
+  building. The picture of its top is painted over with the ground around it, and so are the
+  holes the scan left where a canopy was too dense to reconstruct.
 
 **Road and land are separate meshes.** The pavement's outline is taken from the photo and the
 ground mesh is cut along it, so every triangle is either road or not. Where a tree's crown hid
-the road's edge from the drone, the edge is carried straight across the gap.
+the road's edge from the drone, the edge is carried straight across the gap, and where a hedge
+took a row of bites out of it, they are filled along the direction the edge runs.
 
 **Trees are generated.** 407 crowns are measured in the scan. A crown too wide to be one tree
 is replanted as several, which gives 822 trees. Each is a generated model chosen by its shape
 (broadleaf, upright, willow, shrub), stretched to the measured height and crown width, and
-coloured with the leaf colour the drone saw. A trunk that would land on pavement is stepped
-back to the verge. The 387 trees whose crowns come within 12 m of pavement get the full model,
+coloured with the leaf colour the drone saw. No tree reaches over the pavement: one whose crown
+would is stepped back from the road by up to 4 m, and whatever still crosses the edge is taken
+off its width. Real crowns do hang over these roads, but a generated tree does not know to
+grow up and over a lane, and its branches would hang in it at windscreen height. The 387 trees whose crowns come within 12 m of pavement get the full model,
 up to 7,000 triangles. The other 435 get one with 40% of the triangles, because stock
 Chrono::VSG draws every triangle of every tree again for each shadow map. An earlier build
 with every tree at full detail ran at 16 frames a second on an M4 Pro. This one holds 50.
@@ -210,8 +216,14 @@ Stock Chrono::VSG takes a texture's values as linear light and encodes the resul
 display, so a photograph used as a texture comes out pale and flat. Measured with grey test
 cards on PyChrono build 1187: flat ground in the script's light shows 0.70 of its texture value
 in linear terms, and a cast shadow is 0.24 as bright as the sunlit ground beside it. Every
-texture and colour in the scene is stored with the inverse of that applied, so that sunlit
-ground appears on screen as it does in the drone's photo. `tools/renderer.py` has the numbers.
+texture and colour in the scene is stored with the inverse of that applied.
+
+That 0.70 is also a ceiling, and the light cannot be turned up past it: nothing lying on the
+ground can show brighter than sRGB 218. The drone exposed the concrete at about 200 and the
+paint on it at 240 and more. Stored as they are, white paint and concrete both hit the ceiling
+and the line disappears, and yellow paint loses its red and turns pale. So the scene is shown a
+little darker than the photo, at 0.8 of its brightness in linear light, which puts the concrete
+near 180 and leaves the paint room to stand out. `tools/renderer.py` has the numbers.
 
 It also draws one side of a triangle only. Leaves are single triangles meant to be seen from
 both sides, and `add_scenery` sets `SetDoubleFaced(True)` on them.
@@ -219,25 +231,30 @@ both sides, and `add_scenery` sets `SetDoubleFaced(True)` on them.
 ### Rebuilding it
 
 `tools/` holds the whole pipeline, and `tools/build_all.sh` runs it from the scan to the
-archive in 13 minutes on an M4 Pro. It needs numpy, scipy, Pillow and PyChrono, and about 15 GB
+archive in 16 minutes on an M4 Pro. It needs numpy, scipy, Pillow and PyChrono, and about 15 GB
 of memory. Every step is seeded: a second run from scratch gave the same archive, byte for byte.
+The script ends by checking the scene (`check_scene.py`: no tree on or over the road, every
+cone on it, no hole in the ground) and listing what is still dark on the pavement
+(`audit_ground.py`).
 `tools/fetch_reference.sh` downloads the USGS data. The scan itself is not in this repository.
 
 ## What is not right
 
 - **Buildings are boxes.** No doors, windows or wall detail, and the wall colour is a guess
   from the little the drone saw of them. Fences, guard rails, light poles and parked vehicles
-  are not modelled at all. The vehicles are painted out of the photo. Fence and pole shadows
-  are still in it as thin lines.
+  are not modelled at all. The vehicles are painted out of the photo. A light pole is still in
+  it, as a faint line lying on the ground where the scan flattened it.
 - **Trees are stylised.** Up close a leaf is a plain triangle about half a metre long. Species
-  are guessed from crown shape. In the woods south of the track the scan could not separate
+  are guessed from crown shape. A tree beside a road is narrower than the real one, because its
+  crown is made to stop at the pavement's edge. In the woods south of the track the scan could not separate
   crowns, so those trees are spread evenly over the canopy it saw, and thinner than the real
   woods. Trees away from the road are visibly sparser if you drive up to them.
 - **The road's edge wanders.** It follows the grass line in the photo, which is ragged by a
   few tenths of a metre, and under tree shadows it is less certain than that.
-- **Shadow removal leaves traces.** Where a tree's shadow crossed the road the concrete is
-  cleaner and smoother than the pavement around it, because the dapple was levelled out. On
-  grass a relit shadow is a little more even and more olive than its surroundings.
+- **Shadow removal leaves traces.** Where a tree's shadow crossed the road the dapple was
+  levelled out and its texture made up with grain borrowed from clean concrete, so cracks and
+  joints are missing there. Thin shadows are painted out wherever a straight dark line three
+  metres long was found, which takes a few sealed cracks with it.
 - **Nothing has collision but the ground.** A car drives through trees, cones and buildings.
 - **The road is as smooth as the lidar.** Joints, cracks and patches are in the picture and not
   in the surface. The lidar has 1 m posts.
