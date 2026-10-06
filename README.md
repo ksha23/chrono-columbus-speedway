@@ -403,9 +403,9 @@ terms as Chrono.
 
 The scene is built from:
 
-- A drone scan of the site flown in September 2024 and processed with
+- A drone scan of the site made in September 2024 by Wisconsin Autonomous, a student
+  organization at the University of Wisconsin-Madison, and processed with
   [WebODM](https://www.opendronemap.org/webodm/).
-  <!-- Who flew it and under what terms it may be shared goes here before this is published. -->
 - The [USGS 3D Elevation Program](https://www.usgs.gov/3d-elevation-program) lidar elevation
   model and [NAIP](https://naip-usdaonline.hub.arcgis.com/) aerial imagery, both public domain.
 - The traffic cone and the vehicle meshes (sedan, Audi, Nissan Patrol) from
