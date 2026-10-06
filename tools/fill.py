@@ -94,7 +94,7 @@ def find_grain(photo, raster, usable_cells, cell, want):
     return np.concatenate([top, top[::-1]], axis=0)
 
 
-def repaint(photo, raster, mask_cells, known_cells, paved_cells, grains, cell, solid=None):
+def repaint(photo, raster, mask_cells, known_cells, paved_cells, grains, cell, solid=None, paved_fine=None):
     """Return the photo with mask_cells repainted as ground.
 
     The *_cells are boolean on the low-resolution grid of size cell. known_cells is the open
@@ -103,6 +103,8 @@ def repaint(photo, raster, mask_cells, known_cells, paved_cells, grains, cell, s
     everything else, so a road keeps its edge where a crown hung over it. grains is the pair of
     grain tiles from find_grain, grass then pavement. solid, if given, marks cells where the
     photo has nothing at all: there the paint goes on at full strength, with no feathering.
+    paved_fine, if given, is the pavement map at its own finer cells: the line between
+    pavement's paint and the land's then follows it, and not the coarse cells' staircase.
     """
     k = int(round(cell / raster["res"]))
     H, W = photo.shape[:2]
@@ -111,8 +113,10 @@ def repaint(photo, raster, mask_cells, known_cells, paved_cells, grains, cell, s
     # A cell on the pavement's edge is part pavement and part grass, and is neither's colour.
     inside = ndimage.binary_erosion(paved_cells, iterations=2)
     outside = ~ndimage.binary_dilation(paved_cells, iterations=2)
-    colour = np.where(paved_cells[..., None], carry_colour(small, known_cells & inside, STRIP), carry_colour(small, known_cells & outside))
+    road_colour, land_colour = carry_colour(small, known_cells & inside, STRIP), carry_colour(small, known_cells & outside)
+    colour = np.where(paved_cells[..., None], road_colour, land_colour)
     paved_like = paved_cells.astype(np.float32)
+    f = 0 if paved_fine is None else H // paved_fine.shape[0]
 
     soft = np.clip(ndimage.gaussian_filter(ndimage.binary_dilation(mask_cells, iterations=1).astype(np.float32), FEATHER / cell) * 1.6, 0, 1)
     if solid is not None:
@@ -129,8 +133,19 @@ def repaint(photo, raster, mask_cells, known_cells, paved_cells, grains, cell, s
         alpha = np.asarray(Image.fromarray(soft[a:b]).resize(size, Image.BILINEAR))[r0 - a * k:r1 - a * k]
         if not (alpha > 0.002).any():
             continue
-        base = np.stack([np.asarray(Image.fromarray(colour[a:b, :, ch]).resize(size, Image.BICUBIC)) for ch in range(3)], -1)[r0 - a * k:r1 - a * k]
-        mix = np.asarray(Image.fromarray(paved_like[a:b].astype(np.float32)).resize(size, Image.BILINEAR))[r0 - a * k:r1 - a * k, :, None]
+        cut = slice(r0 - a * k, r1 - a * k)
+
+        def enlarged(field):
+            return np.stack([np.asarray(Image.fromarray(np.ascontiguousarray(field[a:b, :, ch])).resize(size, Image.BICUBIC)) for ch in range(3)], -1)[cut]
+
+        if f:
+            on = np.repeat(np.repeat(paved_fine[r0 // f:(r1 + f - 1) // f], f, axis=0), f, axis=1)[r0 % f:r0 % f + (r1 - r0), :W]
+            on = np.pad(on, ((0, 0), (0, W - on.shape[1])))
+            mix = ndimage.uniform_filter(on.astype(np.float32), 3)[..., None]
+            base = mix * enlarged(road_colour) + (1 - mix) * enlarged(land_colour)
+        else:
+            base = enlarged(colour)
+            mix = np.asarray(Image.fromarray(paved_like[a:b].astype(np.float32)).resize(size, Image.BILINEAR))[cut][:, :, None]
         rows = (np.arange(r0, r1) % period)[:, None]
         grain = grains[0][rows, cols[None, :]] * (1 - mix) + grains[1][rows, cols[None, :]] * mix
         painted = np.clip(base + grain, 0, 255)
@@ -331,12 +346,73 @@ def even_out(photo, raster, shadow, known_cells, paved_cells, water_cells, cell,
     return out
 
 
-def repaint_tiled(photo, raster, mask, grain, margin=0.08, tile=512):
+SPOT = 12.0          # grey levels a blotch stands off the pavement around it
+SPOT_AREA = 2.0      # square metres: anything larger is a patch of other pavement, and stays,
+SPOT_THIN = 1.2      # unless it is no wider than this many metres anywhere: lines, and where lines cross
+SPOT_NEAR = 4.0      # metres from a relit shadow or a crown within which blotches are painted out
+
+
+def unspot(photo, raster, paved_fine, shade_fine, grain, log=print, roads_fine=None):
+    """Paint out the blotches left on pavement. In place.
+
+    Relighting and levelling take a tree's shadow off a road, but not every fleck of sun
+    that came through its leaves, nor every scrap of the crown's own picture, nor the shadow
+    of a lattice mast, which is all thin lines. Pavement is one material. Within SPOT_NEAR of
+    where a shadow was relit or a crown stood (shade_fine, on the pavement map's cells), and
+    anywhere on a road (roads_fine), whatever stands SPOT grey levels off the pavement around
+    it and is small or thin is painted over with plain pavement. A crack or a joint goes
+    with it. A patch of other pavement is neither small nor thin, and stays.
+    """
+    h, w = paved_fine.shape
+    k = photo.shape[0] // h
+    cell = raster["res"] * k
+    lum = np.zeros((h, w), np.float32)
+    for r0 in range(0, h, 512):
+        r1 = min(r0 + 512, h)
+        block = np.asarray(photo[r0 * k:r1 * k, :w * k], dtype=np.float32).reshape(r1 - r0, k, w, k, 3).mean((1, 3))
+        lum[r0:r1] = block @ np.array([0.30, 0.59, 0.11], np.float32)
+    inside = ndimage.binary_erosion(paved_fine, iterations=3)
+    zone = inside & (ndimage.distance_transform_edt(~shade_fine) * cell <= SPOT_NEAR)
+    if roads_fine is not None:
+        zone |= inside & roads_fine
+    if not zone.any():
+        return
+    sigma = 1.5 / cell
+    weight = inside.astype(np.float32)
+    tone = ndimage.gaussian_filter(lum * weight, sigma) / np.maximum(ndimage.gaussian_filter(weight, sigma), 1e-3)
+    # Again without what stands out, so that a blotch does not pull its own reference toward itself.
+    weight = (inside & (np.abs(lum - tone) < SPOT)).astype(np.float32)
+    seen = ndimage.gaussian_filter(weight, sigma)
+    tone = np.where(seen > 0.05, ndimage.gaussian_filter(lum * weight, sigma) / np.maximum(seen, 1e-3), tone)
+    spots = zone & (np.abs(lum - tone) > SPOT)
+    labels, count = ndimage.label(spots, structure=np.ones((3, 3)))
+    if count == 0:
+        return
+    index = np.arange(1, count + 1)
+    area = ndimage.sum(spots, labels, index=index) * cell * cell
+    # How far the deepest point of each blotch is from its own rim: half its width.
+    half = ndimage.maximum(ndimage.distance_transform_edt(spots), labels, index=index) * cell
+    wanted = (area <= SPOT_AREA) | (half <= SPOT_THIN / 2)
+    spots = np.isin(labels, index[wanted])
+    spots = ndimage.binary_dilation(spots, iterations=1) & paved_fine
+    def full_size(cells):
+        out = np.zeros(photo.shape[:2], bool)
+        big = np.repeat(np.repeat(cells, k, axis=0), k, axis=1)
+        out[:big.shape[0], :big.shape[1]] = big[:out.shape[0], :out.shape[1]]
+        return out
+
+    repaint_tiled(photo, raster, full_size(spots), grain, source=full_size(inside))
+    log(f"  {int(wanted.sum())} blotches painted off the pavement, {spots.sum() * cell * cell:.0f} m2")
+
+
+def repaint_tiled(photo, raster, mask, grain, margin=0.08, tile=512, source=None):
     """repaint_small for masks made of long thin things, such as painted lines. In place.
 
     repaint_small works on each connected patch in its own bounding box, and a line three
     hundred metres long has a bounding box of thirty million pixels. Here the mask is taken a
     tile at a time instead, each with enough of its surroundings to draw colour from.
+    source, if given, marks the only pixels colour may be drawn from: a patch at the road's
+    edge is then filled from the road and not from the grass beside it.
     """
     res = raster["res"]
     grow = int(round(margin / res))
@@ -351,7 +427,10 @@ def repaint_tiled(photo, raster, mask, grain, margin=0.08, tile=512):
             r0, r1, c0, c1 = max(r - pad, 0), min(r + tile + pad, H), max(c - pad, 0), min(c + tile + pad, W)
             hole = ndimage.binary_dilation(mask[r0:r1, c0:c1], iterations=grow)
             window = photo[r0:r1, c0:c1].astype(np.float32)
-            fillc = _drawn_in(window, ~hole & (window.max(-1) > 0))
+            known = ~hole & (window.max(-1) > 0)
+            if source is not None and (known & source[r0:r1, c0:c1]).any():
+                known &= source[r0:r1, c0:c1]
+            fillc = _drawn_in(window, known)
             rows = (np.arange(r0, r1) % period)[:, None]
             cols = (np.arange(c0, c1) % period)[None, :]
             painted = np.clip(fillc + grain[rows, cols], 0, 255)

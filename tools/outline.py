@@ -95,7 +95,7 @@ def _curve_through(points):
     return origin, axis, fit, float(np.sqrt(np.mean(off[keep] ** 2)))
 
 
-def carry_on(paved, raster, unseen):
+def carry_on(paved, raster, unseen, fixed=None):
     """The outline redrawn wherever it was never seen. Returns (new mask, stretches redrawn).
 
     Under a tree's crown the pavement's edge is a guess, and the guess is a bite out of the
@@ -126,6 +126,8 @@ def carry_on(paved, raster, unseen):
                 continue
             if closed and not (pad <= sl.start < len(path) - pad):
                 continue
+            if fixed is not None and fixed[r[a:b + 1], c[a:b + 1]].mean() > 0.9:
+                continue                                    # an edge the road model drew
             before = np.nonzero(trusted[a - look:a + 1])[0] + a - look
             after = np.nonzero(trusted[b:b + look + 1])[0] + b
             # The nearest seen edge on each side says most: fifteen metres of it at the outside.
@@ -150,7 +152,7 @@ def carry_on(paved, raster, unseen):
     return paved ^ flip, count
 
 
-def _once(paved, raster, plain=None):
+def _once(paved, raster, plain=None, fixed=None):
     """One pass over every outline. Returns (new mask, kinks taken out)."""
     res = pavement.RES
     signed = (ndimage.distance_transform_edt(paved) - ndimage.distance_transform_edt(~paved)) * res
@@ -167,7 +169,7 @@ def _once(paved, raster, plain=None):
                 continue
             r = np.clip(((raster["y1"] - path[a:b + 1, 1]) / res).astype(int), 0, paved.shape[0] - 1)
             c = np.clip(((path[a:b + 1, 0] - raster["x0"]) / res).astype(int), 0, paved.shape[1] - 1)
-            if apron[r, c].any():
+            if apron[r, c].any() or (fixed is not None and fixed[r, c].mean() > 0.9):
                 continue
             bridge = kinks.bridge(even, a, b)
             old = path[a:b + 1].copy()
@@ -184,23 +186,24 @@ def _once(paved, raster, plain=None):
     return paved ^ flip, count
 
 
-def unkink(distance, raster, log=print, unseen=None, plain=None):
+def unkink(distance, raster, log=print, unseen=None, plain=None, fixed=None):
     """Tidy the roads' outlines. Returns (signed distance, pavement mask).
 
     Kinks are taken out first. Then, if unseen is given, the stretches nobody saw are redrawn
     from the seen edge either side of them, which is a truer guide with its notches gone.
     Then the kinks that leaves. plain marks ground the photo shows plainly, sunlit and even:
     a wedge of mown grass between two roads is a notch in the pavement in every way but
-    that one, and is left as it is.
+    that one, and is left as it is. fixed marks edges that are already as they should be:
+    the ones the road model drew.
     """
     res = pavement.RES
     paved = distance > 0
-    new, total = _once(paved, raster, plain)
+    new, total = _once(paved, raster, plain, fixed)
     carried = 0
     if unseen is not None:
-        new, carried = carry_on(new, raster, unseen)
+        new, carried = carry_on(new, raster, unseen, fixed)
     for _ in range(2):          # a notch inside a longer wobble shows only once the notch is gone
-        new, count = _once(new, raster, plain)
+        new, count = _once(new, raster, plain, fixed)
         total += count
         if count == 0:
             break

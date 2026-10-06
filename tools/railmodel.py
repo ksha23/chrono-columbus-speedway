@@ -225,6 +225,12 @@ def _posts(path, level, actual, direction, normal, every, half, top):
     return _merge(pieces)
 
 
+def guard_line(points):
+    """The line a guard rail is built on: its points a metre apart, evened out over a dozen metres."""
+    path = resample(points)
+    return _smooth(_smooth(path, 6), 6) if len(path) >= 2 else path
+
+
 def make(kind, points, height, elevation, road_side=1.0):
     """Meshes for one barrier: {"beam" or "rails": (vertices, faces), "posts": (vertices, faces)}.
 
@@ -237,11 +243,9 @@ def make(kind, points, height, elevation, road_side=1.0):
     the ground's grade evened out over some fifteen metres. Posts reach down to the ground as it
     is, so where it dips the posts are longer and the rail stays level.
     """
-    path = resample(points)
+    path = guard_line(points) if kind == "guardrail" else resample(points)
     if len(path) < 2:
         return None
-    if kind == "guardrail":
-        path = _smooth(_smooth(path, 6), 6)
     direction, normal = _frames(path)
     actual = np.asarray(elevation(path[:, 0], path[:, 1]), float)
     if kind == "guardrail":

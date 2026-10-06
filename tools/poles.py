@@ -212,6 +212,43 @@ def locate(photo, raster, paved, height, trees, buildings, cell, work):
     return confirm(find(photo, raster, paved & where, ~paved & where, height, cell, suns(work)), photo, raster, paved)
 
 
+def pictures(poles, strokes, crisp):
+    """The strokes of traced paint that are a pole's own picture: a set of their indices.
+
+    From above a pole is a thin white line leaning away from its foot, a few metres long for
+    a tall one, with the lamp at its far end. Where the pole leans out over the pavement the
+    trace takes that line for paint. A straight white stroke that points at a pole's foot
+    from within the pole's own height of it is the pole, provided it is as bright and as
+    sharp as a pole is: a faded stall line can point at a pole too. crisp(points, widest) says whether the photo shows a
+    bright line no wider than widest along some points. Each pole's picture is lengthened to take in what was
+    found, so that footprint covers it.
+    """
+    found = set()
+    for n, stroke in enumerate(strokes):
+        pts = np.asarray(stroke["points"], float)
+        if stroke["colour"] != "white" or len(pts) < 2:
+            continue
+        for pole in poles:
+            foot = np.array([pole["x"], pole["y"]])
+            away = np.hypot(*(pts - foot).T)
+            far = pts[int(np.argmax(away))]
+            reach = float(away.max())
+            # It starts where the picture already known leaves off, not somewhere out on the pavement.
+            if reach > 1.1 * pole["height"] or reach < 0.5 or away.min() > pole["picture_length"] + 2.0:
+                continue
+            # Every point of the stroke lies near the line from the foot to its far end.
+            way = (far - foot) / reach
+            off = np.abs((pts - foot) @ np.array([-way[1], way[0]]))
+            if off.max() > 0.35 + 0.05 * reach or not crisp(pts, 0.5):
+                continue
+            found.add(n)
+            if reach > pole["picture_length"]:
+                pole["picture_length"] = round(reach, 2)
+                pole["picture_azimuth"] = float(np.degrees(np.arctan2(way[0], way[1])) % 360.0)
+            break
+    return found
+
+
 def footprint(poles, raster, shape):
     """Full-size mask of what each pole left in the photo: its shadow, its picture, its footing."""
     res = raster["res"]

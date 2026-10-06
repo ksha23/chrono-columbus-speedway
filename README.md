@@ -14,7 +14,7 @@ curl -LO https://raw.githubusercontent.com/ksha23/chrono-columbus-speedway/main/
 python speedway.py
 ```
 
-The first run downloads the scene (97 MB) into `scene/` beside the script, checks its
+The first run downloads the scene (94 MB) into `scene/` beside the script, checks its
 SHA-256 and unpacks it. Later runs start in a few seconds.
 
 Hold **W** to accelerate and **S** to brake, and hold **A** or **D** to steer. Let go and the car
@@ -91,9 +91,9 @@ works directly with `RigidTerrain::AddPatch`, and so do `speedway_road.obj` and
 
 ```
 speedway_scene.json    manifest: 140 assets, 1,181 placements in 11 groups
-speedway_ground.obj    the ground as one welded collision mesh, 643,906 triangles
-speedway_road.obj      the pavement's 78,692 of those triangles
-speedway_terrain.obj   the other 565,214
+speedway_ground.obj    the ground as one welded collision mesh, 643,934 triangles
+speedway_road.obj      the pavement's 78,888 of those triangles
+speedway_terrain.obj   the other 565,046
 ground/                the same triangles split by texture tile, with texture coordinates
 textures/standard/     ground photo at 5 cm per pixel, one JPEG per tile
 textures/low/          the same at 10 cm
@@ -119,7 +119,7 @@ The manifest looks like this:
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "frame": { "utm_zone": 16, "origin_easting": 329450.0, "origin_northing": 4794560.0,
              "extent": [-640.0, -512.0, 640.0, 512.0] },
   "labels": ["Road", "Terrain", "Buildings", "Trees", "Cones", "Poles", "Vehicles", "Barriers",
@@ -157,8 +157,8 @@ The manifest looks like this:
 To fetch the scene without the script:
 
 ```sh
-curl -LO https://github.com/ksha23/chrono-columbus-speedway/releases/download/v2/speedway_scene_base.tar.gz
-echo "cecba2a6e15e049e8d5630aad17255504243d14fa2ec98ed799eb6aab61c4b3c  speedway_scene_base.tar.gz" | shasum -a 256 -c
+curl -LO https://github.com/ksha23/chrono-columbus-speedway/releases/download/v3/speedway_scene_base.tar.gz
+echo "93d49e458281231c507bb02d8d5a28305e3bbfd8bf6e922d4f214cd5cf0db700  speedway_scene_base.tar.gz" | shasum -a 256 -c
 mkdir scene && tar -xzf speedway_scene_base.tar.gz -C scene
 ```
 
@@ -204,6 +204,14 @@ That figure is the limit of the check as much as of the fit, since the imagery w
   painted over with the ground around it, and so are the holes the scan left where a canopy
   was too dense to reconstruct.
 
+- *What is left on the roads.* After all of that, a road that ran under trees still has
+  flecks of sun and scraps of crown on it, and one has the shadow of a lattice tower across
+  it, all thin lines that no shadow step saw. Pavement is one material. So on the roads, and
+  on any pavement within 4 m of where a shadow was relit or a crown stood, whatever stands 12
+  grey levels off the pavement around it and is small (under 2 m2) or thin (no wider than
+  1.2 m anywhere) is painted over with plain pavement: 6,228 blotches, 1,282 m2 in
+  all. A patch of different pavement is neither small nor thin, and stays.
+
 Every patch that is painted over gets its colour from the ground around it and its grain from
 the cleanest 19 m square of the same surface on the site. Even that square of concrete has a
 joint, a crack, a tyre mark and a painted corner in it, and each would be stamped onto every
@@ -220,7 +228,7 @@ it stands and how big it is. The rest is a model.
 | 609 m of guard rail in 6 pieces | thin lines of galvanised steel, bluer than what they lie on, where the scan shows something under a metre tall | a W-beam on posts, facing the road |
 | the fence, 1,581 m | the same, away from pavement. It shows for 616 m and is carried on between those stretches, since it runs round the whole property. One gate, at the entrance | posts, a top rail and two wires |
 | 5 small structures | colourless, even-topped things up to 3.5 m tall: tanks, a hut, bleachers | a block of the footprint, height and colour measured |
-| 810 strokes of road paint | traced in the photo, then refitted as straights and arcs: see below | ribbons laid 2 cm above the road |
+| 757 strokes of road paint | traced in the photo, then refitted as straights and arcs: see below | ribbons laid 2 cm above the road |
 
 **Road paint is drawn, not photographed.** In the ground's picture a lane line is two texels
 wide, and from a car, at a shallow angle, the renderer's texture filtering smears it away.
@@ -235,9 +243,33 @@ corners. Pieces of one line are joined across worn gaps, ends are carried on to 
 stop short of, and the dashes of a run are laid on one smooth curve at one length. A solid
 line that runs under a tree comes out of the trace in two pieces: they are joined if they
 point at each other and the photo does not show bare road between them (3 joins).
-Short strokes alone in a tree's dapple are flecks of sun, and are dropped (18). Where a lane
+Short strokes alone in a tree's dapple are flecks of sun, and are dropped (16). Where a lane
 line's run has a gap of exactly two or three spacings, under a tree's shadow for instance, the
 missing dashes are put back: 4 of them.
+
+A double yellow line needs more than that. Its two lines are a hand apart, and at 5 cm a
+pixel the photo shows the pair as one band of yellow where a single line shows a narrower
+one. The trace follows one line somewhere in that band, or both for a while, so a double line
+drawn from its trace is single for most of its length, with a second line that starts and
+stops beside it and is not quite parallel. So for these the trace only says where to look.
+Every half metre along it the photo is asked where the middle of the yellow is and how wide
+it is. The width settles what the line is: along every pair on the site four readings in five
+fall between 0.35 and 0.45 m, and along every single line between 0.17 and 0.29. The middles give one smooth curve, and
+the pair is drawn at equal distances either side of it, parallel because the two lines are
+the same curve. Worn paint drops out of the trace long before it drops out of the photo, so
+each double line is also followed past both ends of its trace, half a metre at a time, for
+as long as the photo shows yellow where the road's own curve says the line should be.
+426 m of double line is drawn this way, in 4 lines, 48 m of it
+beyond where the trace stopped. The whole width of the band is painted out of the photo.
+
+White paint on a road is a different problem: there is none. On the skid pad and in the car
+parks white paint is everywhere, in every shape. On a road it could only be a line, long and
+crisp, and what the trace finds there is the joint down the middle of a slab, the pale rim of
+a stain, sand washed onto the pavement's edge, a dead branch, and light poles, which lean in
+a photo taken from above and lie across the pavement as thin white lines. So away from the
+pad and the car parks a white stroke is kept only if it is one of a run of dashes, or is two
+metres long and passes a second, harder look at the photo. 37 strokes were dropped that
+way. 4 more were poles, and are painted out with the rest of the pole.
 
 Parking stalls get the same treatment as a row. Their lines are the faintest paint on the
 site, white on concrete the sun has bleached nearly as white, and tracing finds only some of
@@ -245,14 +277,18 @@ each row and often only part of a line. A row of stalls is parallel lines one pi
 of one length, so each row is fitted as that, and the photo is then asked the easier question
 of whether there is paint along each line the row predicts. 4 rows were found, at a
 pitch of 2.7 m, and 31 lines are drawn where 19 had been traced. The strokes travel with the scene as
-`markings/strokes.json`: 1,386 m of yellow and 797 m of white in 810 strokes, in
+`markings/strokes.json`: 1,619 m of yellow and 763 m of white in 757 strokes, in
 scene coordinates, for anyone who wants the lane geometry as data.
 
 **Edge lines are an addition.** The real track has no painted edge lines. The scene has them
-as an option, on by default: a white line 10 cm wide along both edges of every road, 3,473 m
+as an option, on by default: a white line 10 cm wide along both edges of every road, 3,499 m
 in all, 30 cm in from the pavement's edge, following the kerb round each junction and running
-inside the guard rail where there is one. A line does not follow a jog in the outline: it is
-carried across on a smooth curve if that keeps it on the pavement, and broken there if not. The skid pad and the car parks have none. They are
+inside the guard rail where there is one, at one distance from the rail for the rail's whole
+length: a rail is the smoothest thing on the roadside, and a line that wanders beside it
+shows. A line does not follow a jog in the outline: it is
+carried across on a smooth curve if that keeps it on the pavement, and broken there if not.
+It runs on across the mouth of a track or a footpath narrower than 4.5 m, does not double
+back round the nose of an island between two roads, and stops 5 m short of a building. The skid pad and the car parks have none. They are
 their own group, `EdgeLines`, with `--no-edge-lines` to leave them out, and their centre lines
 are in `markings/edge_lines.json`.
 
@@ -265,15 +301,19 @@ or crown lay over the kerb: the trace takes a bite out of the road or bulges int
 The centre line is known, though: it is the yellow line, already fitted to a smooth curve. So
 along each of the 13 centre lines the distance to the traced edge is measured on both
 sides, metre by metre, the road's half width on each side is taken to be the running median
-of those measurements over 30 m, and the outline is redrawn at that width: 2,723 m of
+of those measurements over 30 m, and the outline is redrawn at that width: 2,865 m of
 edge in all. Junctions keep their traced outline, since there the edge really does curve away.
 Where the outline moves, the photo is repainted to match.
 
 An edge that was only ever seen in shade is not trusted for that. Along the north road a
 gravel shoulder lies in the shadow of a tree line for a hundred metres, and relit it passes
 for concrete. Where fewer than two in five of the stations within reach saw their edge in
-plain light, the road is taken to be as wide on that side as on the other: 737 m of
+plain light, the road is taken to be as wide on that side as on the other: 748 m of
 edge were drawn that way.
+
+An edge drawn this way is smooth by construction, and nothing later is allowed to bend it.
+At each end of a modelled stretch the width eases over 6 m into the outline as traced, so the
+edge has no step where the one hands over to the other.
 
 Three more rules tidy what that leaves, for the stretches with no centre line.
 
@@ -281,11 +321,11 @@ Three more rules tidy what that leaves, for the stretches with no centre line.
   is not carried on beyond one.
 - A kerb runs on. Where the outline steps aside and comes back within a few metres, round a
   bush or the mouth of a footpath, the notch is cut out and its two ends are joined by a
-  smooth curve. 61 kinks were taken out this way.
+  smooth curve. 48 kinks were taken out this way.
 - Under a crown the edge is a guess, but it is in view before the crown and again after it,
   if only in glimpses between one bush and the next. A gentle curve is fitted through what
   was seen of the edge either side, passing by any bush that takes a notch out of it, and the
-  unseen stretch is redrawn along that curve: 19 stretches.
+  unseen stretch is redrawn along that curve: 4 stretches.
 
 None of the three argues with ground the photo shows plainly. A wedge of mown grass between
 two roads is a notch in the pavement in every way but that one, and it stays.
@@ -296,10 +336,10 @@ is replanted as several, which gives 949 trees. Each is a generated model chosen
 coloured with the leaf colour the drone saw. No tree reaches over the pavement: one whose crown
 would is stepped back from the road by up to 4 m, and whatever still crosses the edge is taken
 off its width. Real crowns do hang over these roads, but a generated tree does not know to
-grow up and over a lane, and its branches would hang in it at windscreen height. The 421 trees whose crowns come within 12 m of pavement get the full model,
-up to 7,000 triangles. The other 528 get one with 40% of the triangles, because stock
+grow up and over a lane, and its branches would hang in it at windscreen height. The 422 trees whose crowns come within 12 m of pavement get the full model,
+up to 7,000 triangles. The other 527 get one with 40% of the triangles, because stock
 Chrono::VSG draws every triangle of every tree again for each shadow map. An earlier build
-with every tree at full detail ran at 16 frames a second on an M4 Pro. This one holds 46 to 49.
+with every tree at full detail ran at 16 frames a second on an M4 Pro. This one holds 47 to 50.
 
 **Buildings are refitted** as a rectangle with straight walls and a gable roof, from the scan's
 roof heights. The roof keeps its own photograph. The walls get one flat colour.
@@ -328,7 +368,7 @@ both sides, and `add_scenery` sets `SetDoubleFaced(True)` on them.
 ### Rebuilding it
 
 `tools/` holds the whole pipeline, and `tools/build_all.sh` runs it from the scan to the
-archive in 25 minutes on an M4 Pro. It needs numpy, scipy, Pillow and PyChrono, and about
+archive in 26 minutes on an M4 Pro. It needs numpy, scipy, Pillow and PyChrono, and about
 15 GB of memory. Every step is seeded: a second run from scratch gave the same archive, byte
 for byte. The script ends by checking the scene (`check_scene.py`: no tree on or over the
 road, cones, cars and paint on it, poles and fence off it, no hole in the ground) and listing
@@ -368,18 +408,23 @@ line on the finished ground from above and circles each kink left in an edge lin
   connecting roads with no yellow line, junction corners and the aprons keep the outline the
   photo gave with its notches taken out, which still wanders by a few tenths of a metre. The
   model assumes a road keeps its width over 30 m, and that it is as wide on one side of its
-  centre line as on the other wherever one side was in shade. 16 small kinks are
-  left in the edge lines, none over 20 degrees.
+  centre line as on the other wherever one side was in shade. 13 small kinks are
+  left in the edge lines, the sharpest 25 degrees, at a corner where two roads meet.
 - **Some trees are only a picture.** Where the scan could not build a crown it printed the
   crown flat on the ground under it. There is no height to find, so no tree is planted and
   the picture stays, as a dark green patch on the verge. Where such a crown lay over a road
   the road is redrawn under it, as above.
+- **A lattice tower is still a picture.** It stands in the grass west of the road to the
+  main building and throws a shadow more than 40 m long. The scan flattened it and nothing
+  stands in for it yet. Its shadow is painted off the road and is still on the grass.
 - **Small things are still in the picture.** A pile of rubble, a heap of junk by the entrance
   and the debris on the gravel lot beside it lie flat in the photo. Nothing stands in for
   them.
 - **Shadow removal leaves traces.** Where a tree's shadow crossed the road the pavement is
   plain concrete of the right tone with borrowed grain, so cracks, joints and stains are
-  missing there and the patch is cleaner than the road around it. Thin shadows are painted out wherever a straight dark line three
+  missing there and for 4 m around, and the patch is cleaner than the road beside it. On
+  every road, cracks, joints and narrow stains were painted out with the blotches, so the
+  roads are plainer than the real ones. The skid pad and the car parks keep theirs. Thin shadows are painted out wherever a straight dark line three
   metres long was found, which takes a few sealed cracks with it.
 - **Nothing has collision but the ground.** A car drives through trees, cones, rails, parked
   cars and buildings.
@@ -393,7 +438,7 @@ line on the finished ground from above and circles each kink left in an edge lin
 
 PyChrono 10.0.0 from the `projectchrono` channel, conda build `py313_1187`, on macOS (Apple
 silicon). On an M4 Pro the demo holds real time at FPS frames a second with shadows on (50 is
-the script's cap). It uses 4.7 GB of memory, or 3.6 GB with `--textures low`. Linux
+the script's cap). It uses 4.8 GB of memory, or 3.5 GB with `--textures low`. Linux
 and Windows have not been tried.
 
 ## Licence and credit

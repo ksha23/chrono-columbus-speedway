@@ -1,9 +1,9 @@
 """White lines along both edges of every road. They are not on the real track: an option.
 
 The line follows the pavement's outline, a little way in from it, wherever the pavement is a
-road and not an apron (the skid pad, a car park). Round a junction it follows the kerb from one
+road and not an apron (the skid pad, a car park) or a track too narrow to be one. Round a junction it follows the kerb from one
 road into the other, as a painted edge line does. Where a guard rail stands on the pavement's
-edge the line runs inside the rail.
+edge the line runs inside the rail, at one distance from it all the way.
 
 The pavement's outline comes from a photograph and wanders by a few tenths of a metre. Paint
 drawn as crisp geometry shows every wobble, so each line is smoothed over fifteen metres with
@@ -12,6 +12,7 @@ in the outline is then bridged, or failing that left out of the line (kinks.py).
 """
 import numpy as np
 from scipy import ndimage, signal
+from scipy.spatial import cKDTree
 
 import kinks
 import pavement
@@ -29,8 +30,13 @@ RAGGED = 0.15       # metres (rms) an outline may stray from its own smoothing a
 GRID = 2            # the outline is traced on every GRID-th cell of the pavement map
 CORNER = 75.0       # degrees a line may turn across a kink that is taken out of it
 END = 5.0           # metres from a line's end within which a kink ends the line instead
+BESIDE_RAIL = 0.6   # metres from a guard rail's own line to the edge line that runs beside it
+EASE = 8.0          # metres past a rail's end over which the line eases back out to the pavement's edge
 BREAK = 15.0        # degrees: a kink this sharp that cannot be bridged is left out of the line
 CLEAR = 2.0         # metres of line left out either side of it
+NARROW = 4.5        # metres: pavement narrower than this is a track or a path, and gets no line
+NOSE = 110.0        # degrees: a line that turns through more than this...
+NOSE_WITHIN = 6.0   # ...within this many metres is rounding the nose of an island
 
 
 def contours(field, level):
@@ -141,6 +147,14 @@ def _run_on(run, clearance, whole):
         near_end = not whole and (first < reach or last >= len(path) - reach)
         if sharp >= BREAK or near_end:
             out[max(first - margin, 0):last + margin + 1] = True
+    # Nor does a painted line double back round the nose of an island. Where the line
+    # turns through more than NOSE degrees within NOSE_WITHIN metres, the nose is left out.
+    chord, span = int(kinks.CHORD / kinks.STEP), int(NOSE_WITHIN / kinks.STEP)
+    if len(path) > chord + span + 2:
+        step = path[chord:] - path[:-chord]
+        heading = np.degrees(np.unwrap(np.arctan2(step[:, 1], step[:, 0])))
+        for i in np.nonzero(np.abs(heading[span:] - heading[:-span]) > NOSE)[0]:
+            out[max(i - margin // 2, 0):i + span + chord + margin // 2 + 1] = True
     if not out.any():
         return [path]
     if whole:
@@ -148,7 +162,57 @@ def _run_on(run, clearance, whole):
         shift = int(np.argmax(out))
         path, out = np.concatenate([path[shift:-1], path[:shift + 1]]), np.concatenate([out[shift:-1], out[:shift + 1]])
     labels, count = ndimage.label(~out)
-    return [path[labels == n] for n in range(1, count + 1)]
+    pieces = []
+    for n in range(1, count + 1):
+        index = np.nonzero(labels == n)[0]
+        piece = path[index]
+        # An end made by a break still has the lead-in to the kink on it: a hook. It is cut
+        # back until the piece ends straight.
+        if index[0] > 0:
+            piece = _unhooked(piece[::-1])[::-1]
+        if index[-1] < len(path) - 1:
+            piece = _unhooked(piece)
+        pieces.append(piece)
+    return pieces
+
+
+def _unhooked(piece):
+    """The piece without the hook on its last few metres, if it has one."""
+    tip, body = int(1.5 / kinks.STEP), int(6.0 / kinks.STEP)
+    for _ in range(int(4.0 / kinks.STEP)):
+        if len(piece) < tip + body + 2:
+            break
+        last, before = piece[-1] - piece[-1 - tip], piece[-1 - tip] - piece[-1 - tip - body]
+        turned = np.degrees(np.arctan2(before[0] * last[1] - before[1] * last[0], before @ last))
+        if abs(turned) <= 5.0:
+            break
+        piece = piece[:-1]
+    return piece
+
+
+def _beside_rails(run, beside):
+    """The line with every stretch that runs along a guard rail laid at one distance from the rail.
+
+    A rail is built on a line evened out over a dozen metres, and it is the smoothest thing
+    on the roadside. A painted line that wanders beside it shows. beside is a list of
+    (points, weights): each rail's own line moved BESIDE_RAIL toward the road and carried
+    straight on for EASE metres past both its ends, with a weight of one along the rail that
+    falls to nothing along those extensions. Where the edge line runs within reach of one it
+    is drawn toward it by that weight. So it keeps its distance from the rail for the whole
+    of the rail's length, and takes EASE metres past the rail's end to move out to where it
+    runs along bare pavement.
+    """
+    out = run.copy()
+    for line, weight in beside:
+        gap, at = cKDTree(line).query(run)
+        labels, count = ndimage.label((gap < 1.2) & (at > 0) & (at < len(line) - 1))
+        for n in range(1, count + 1):
+            index = np.nonzero(labels == n)[0]
+            if len(index) * SPACING < 4.0:
+                continue
+            pull = weight[at[index]][:, None]
+            out[index] = pull * line[at[index]] + (1.0 - pull) * run[index]
+    return out
 
 
 def find(distance, raster, scanned, rails, log=print):
@@ -165,9 +229,13 @@ def find(distance, raster, scanned, rails, log=print):
     core = distance >= APRON
     apron = paved & (ndimage.distance_transform_edt(~core) * res <= APRON + STOP) if core.any() else np.zeros_like(paved)
 
-    usable = paved.copy()
-    for rail in rails:
-        path = railmodel.resample(rail["points"], res)
+    # A road is at least NARROW wide. A dirt track or a footpath that leaves one is not, and
+    # the line runs on across its mouth: here the pavement is what a disc that wide fits in.
+    room = ndimage.distance_transform_edt(paved) * res >= NARROW / 2
+    usable = paved & (ndimage.distance_transform_edt(~room) * res <= NARROW / 2) if room.any() else paved.copy()
+    built = [railmodel.guard_line(rail["points"]) for rail in rails]
+    for line in built:
+        path = railmodel.resample(line, res)
         r = np.clip(((raster["y1"] - path[:, 1]) / res).astype(int), 0, paved.shape[0] - 1)
         c = np.clip(((path[:, 0] - raster["x0"]) / res).astype(int), 0, paved.shape[1] - 1)
         line = np.zeros_like(paved)
@@ -180,6 +248,28 @@ def find(distance, raster, scanned, rails, log=print):
         r = (raster["y1"] - pts[:, 1]) / res - 0.5
         c = (pts[:, 0] - raster["x0"]) / res - 0.5
         return ndimage.map_coordinates(grid, [r, c], order=order, mode="nearest")
+
+    # Each rail's own line, moved toward the road: where the edge line beside it belongs.
+    beside = []
+    for line in built:
+        if len(line) < 3:
+            continue
+        way = np.gradient(line, axis=0)
+        way /= np.maximum(np.hypot(*way.T), 1e-9)[:, None]
+        left = np.stack([-way[:, 1], way[:, 0]], axis=1)
+        side = 1.0 if at(field, line + 1.5 * left).mean() >= at(field, line - 1.5 * left).mean() else -1.0
+        moved = railmodel.resample(line + side * BESIDE_RAIL * left, 0.1)
+        count = int(EASE / 0.1)
+        reach = (np.arange(1, count + 1) * 0.1)[:, None]
+        before = moved[0] - reach[::-1] * way[0]
+        after = moved[-1] + reach * way[-1]
+        ramp = np.arange(1, count + 1) / (count + 1.0)
+        points, weight = np.concatenate([before, moved, after]), np.concatenate([ramp, np.ones(len(moved)), ramp[::-1]])
+        # Only where that is on the pavement. A rail can stand a shoulder's width beyond the
+        # concrete, and the line stays on the concrete.
+        on = (at(field, points) > 0.0).astype(np.float32)
+        weight *= np.clip(2.0 * ndimage.uniform_filter1d(on, count, mode="nearest") - 1.0, 0.0, 1.0)
+        beside.append((points, weight))
 
     wanted = (~apron & scanned).astype(np.float32)
     strokes = []
@@ -224,6 +314,7 @@ def find(distance, raster, scanned, rails, log=print):
                 gy = (at(field, run + [0.0, 0.2]) - at(field, run - [0.0, 0.2])) / 0.4
                 size = np.maximum(np.hypot(gx, gy), 1e-6)
                 run[near] += ((INSET - d) / size)[near, None] * np.stack([gx / size, gy / size], axis=1)[near]
+            run = _beside_rails(run, beside)
             pieces = _run_on(run, lambda p: at(field, p), whole)
             for piece in pieces:
                 if len(piece) < 2 or railmodel.length_of(piece) < SHORTEST:

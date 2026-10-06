@@ -28,6 +28,7 @@ WINDOW = 30.0      # metres either side over which the road's width is judged
 FLARE = 10.0       # metres from a junction within which the traced outline is kept
 CLEAR = 2.5        # metres beyond the fitted edge that are made grass
 SOLID = 20.0       # metres: a yellow stroke this long is a centre line in its own right
+BLEND = 6.0        # metres over which a modelled edge eases into the traced one at its ends
 
 
 def centre_lines(strokes):
@@ -104,7 +105,10 @@ def _running_median(values, half, least=None):
 
 
 def straighten(distance, raster, strokes, log=print, doubtful=None):
-    """Redraw the pavement's outline along the roads. Returns (signed distance, pavement mask).
+    """Redraw the pavement's outline along the roads.
+
+    Returns (signed distance, pavement mask, the cells within a metre of an edge drawn
+    here). Those edges are smooth by construction, and nothing later should bend them.
 
     doubtful marks, on the pavement's cells, ground the photo showed badly or not at all:
     under a crown, or in a shadow that was relit. An edge traced there is often not the
@@ -121,6 +125,7 @@ def straighten(distance, raster, strokes, log=print, doubtful=None):
                 np.clip(((points[..., 0] - raster["x0"]) / res).astype(int), 0, w - 1))
 
     new = paved.copy()
+    drawn = np.zeros_like(paved)
     steps = np.arange(0.0, REACH, res / 2)
     roads = redrawn = mirrored = 0
     moved = []
@@ -166,6 +171,12 @@ def straighten(distance, raster, strokes, log=print, doubtful=None):
             if not model.any():
                 continue
             moved.append(np.abs(first_off[model] - fitted[model]))
+            # Where the modelled stretch ends the traced outline takes over, and the two
+            # seldom agree to the decimetre. Over the last BLEND metres the width eases from
+            # the one to the other, so the edge has no step in it there.
+            run_in = np.minimum(ndimage.distance_transform_edt(model) / BLEND, 1.0)
+            near = np.isfinite(first_off) & (np.abs(first_off - fitted) < 0.8)
+            fitted = np.where(near, run_in * fitted + (1.0 - run_in) * np.nan_to_num(first_off), fitted)
             # Stations a twentieth of a metre apart, so the strip is drawn without gaps.
             fine = np.arange(0, len(line) - 1 + 1e-9, res / 2)
             base = np.minimum(fine.astype(int), len(line) - 2)
@@ -184,9 +195,11 @@ def straighten(distance, raster, strokes, log=print, doubtful=None):
                 beyond |= (steps[None, :] <= (traced[use] + 0.5)[:, None]) & doubtful[r, c]
             new[r[beyond & ~inside], c[beyond & ~inside]] = False
             new[r[inside], c[inside]] = True
+            beside = np.abs(steps[None, :] - width[use][:, None]) <= 1.0
+            drawn[r[beside], c[beside]] = True
             redrawn += int(model.sum())
     if roads == 0:
-        return distance, paved
+        return distance, paved, drawn
     # Close the pinholes the drawing leaves on the outside of bends, and keep the one network.
     new = ndimage.binary_closing(new, iterations=1) | new
     soft = ndimage.gaussian_filter(new.astype(np.float32), pavement.SMOOTH / res / 2)
@@ -197,4 +210,4 @@ def straighten(distance, raster, strokes, log=print, doubtful=None):
     log(f"  roads: {roads} centre lines, outline redrawn along {redrawn} m of edge at the road's own width, {mirrored} m of it taken from the other side."
         f" The trace was within 10 cm of it for {100 * (off < 0.1).mean():.0f}% of that, and over 50 cm out for {100 * (off > 0.5).mean():.1f}%")
     signed = ((ndimage.distance_transform_edt(new) - ndimage.distance_transform_edt(~new)) * res).astype(np.float32)
-    return signed, new
+    return signed, new, drawn

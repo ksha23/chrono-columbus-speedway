@@ -302,7 +302,7 @@ def main():
         print(f"[{time.perf_counter() - start:5.1f} s] {len(found_cones)} cones, {triangles} triangles each")
 
     manifest = {
-        "version": 2,
+        "version": 3,
         "name": "Columbus 151 Speedway",
         "frame": {
             "description": "x east, y north, z up, metres. z is elevation above sea level (NAVD88).",

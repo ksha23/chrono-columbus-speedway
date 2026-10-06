@@ -32,6 +32,7 @@ LONG = 5.0            # metres: a stroke this long is a line, and may run on und
 UNDER = 30.0          # metres: the longest stretch of a line carried on where the photo could not show it
 BARE = 2.0            # metres of bare road in plain view that such a stretch may have in it
 SPECK = 1.5           # metres: a stroke shorter than this, alone in a tree's dapple, is a fleck of sun
+ROAD_LINE = 2.0       # metres: on a road, a white stroke shorter than this is not a line
 
 
 def _unit(v):
@@ -255,6 +256,32 @@ def weed(strokes, unseen):
     return kept, len(strokes) - len(kept)
 
 
+def roadworthy(strokes, where, crisp):
+    """Drop the white strokes that are not paint from the roads. Returns (strokes, how many).
+
+    On the skid pad and in the car parks white paint is everywhere and comes in every shape.
+    On a road it comes as a line: something long and crisp. What the trace finds there
+    besides is the joint down the middle of the slab, the pale rim of a stain, sand washed
+    onto the edge, a dead branch. So away from the aprons a white stroke stays only if it is
+    one of a run of dashes, or is ROAD_LINE long and passes crisp, a second and harder look
+    at the photo. A stroke that is mostly off the pavement goes wherever it is.
+    where(points) gives the share of some points that is on pavement and the share that is
+    on an apron.
+    """
+    in_run = {n for chain in markings_regular.runs(strokes, shortest=0.25) if len(chain) >= 3 for n in chain}
+    kept = []
+    for n, s in enumerate(strokes):
+        if s["colour"] == "white":
+            pts = np.asarray(s["points"], float)
+            paved, apron = where(railmodel.resample(pts, 0.1))
+            if paved < 0.9:
+                continue
+            if apron <= 0.5 and n not in in_run and not (railmodel.length_of(pts) >= ROAD_LINE and crisp(pts)):
+                continue
+        kept.append(s)
+    return kept, len(strokes) - len(kept)
+
+
 def meet(strokes):
     """Carry ends on to the corner or the line they stop just short of. In place. Returns how many."""
     segs = []      # every segment of every stroke: (stroke, a, b)
@@ -324,14 +351,17 @@ def dashes(strokes):
     return moved
 
 
-def tidy(strokes, log=print, unseen=None, view=None):
+def tidy(strokes, log=print, unseen=None, view=None, road=None):
     """Join, fit, meet and regularise. Returns the new list of strokes.
 
     unseen, if given, says which of an array of points lie in a tree's shadow or beside its
-    crown: see weed. view is what carry needs to join a line across a gap.
+    crown: see weed. view is what carry needs to join a line across a gap. road is the pair
+    (where, crisp) that roadworthy needs.
     """
     joined, made = join(strokes)
-    under = flecks = 0
+    under = flecks = stray = 0
+    if road is not None:
+        joined, stray = roadworthy(joined, *road)
     if unseen is not None:
         joined, flecks = weed(joined, unseen)
     if view is not None:
@@ -346,5 +376,6 @@ def tidy(strokes, log=print, unseen=None, view=None):
     for s in out:
         s["points"] = [[round(float(x), 3), round(float(y), 3)] for x, y in s["points"]]
     log(f"  road paint tidied: {made} worn gaps joined, {under} lines carried on under trees, {flecks} flecks of sun dropped,"
+        f" {stray} white strokes on roads that are not paint dropped,"
         f" {laid} dashes laid on their run's curve, {carried} ends carried on to meet a line")
     return out

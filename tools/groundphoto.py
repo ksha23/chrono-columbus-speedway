@@ -18,12 +18,14 @@ import edgelines
 import fill
 import markings
 import markings_regular
+import markings_solid
 import markings_stalls
 import markings_tidy
 import markmodel
 import objects
 import outline
 import pavement
+import photoprofile
 import poles
 import railmodel
 import roads
@@ -242,8 +244,6 @@ def prepare(work, ref, raster, deshadow=True, without=(), log=print):
 
         found_paint = markings.find(raw, raster, paved, taken, obj["height"], cell, matte)
         log(f"  {len(found_paint)} strokes of road paint traced")
-        # What is painted out is the paint as traced. What is drawn is the paint as fitted.
-        traced = markmodel.footprint(found_paint, raster, painted.shape[:2]) & on_road
         beside = ndimage.binary_dilation(obj["trees"], iterations=int(round(2.0 / cell))) | g["holes"]
 
         def shaded(points):
@@ -254,11 +254,51 @@ def prepare(work, ref, raster, deshadow=True, without=(), log=print):
             dark = np.array([matte[i, j] for i, j in zip(r, c)]) > 32 if matte is not None else np.zeros(len(points), bool)
             return dark | beside[np.minimum(r // k_cell, beside.shape[0] - 1), np.minimum(c // k_cell, beside.shape[1] - 1)]
 
-        fitted = markings_tidy.tidy(found_paint, log, shaded, paint_view(raw, matte, raster, paved))
+        # Aprons: the pad and the car parks, where a disc of the edge lines' radius fits.
+        core = distance >= edgelines.APRON
+        apron = ndimage.distance_transform_edt(~core) * pavement.RES <= edgelines.APRON + edgelines.STOP if core.any() else np.zeros_like(paved)
+
+        def where(points):
+            """The share of some points that is on pavement, and the share that is on an apron."""
+            r = np.clip(((raster["y1"] - points[:, 1]) / pavement.RES).astype(int), 0, paved.shape[0] - 1)
+            c = np.clip(((points[:, 0] - raster["x0"]) / pavement.RES).astype(int), 0, paved.shape[1] - 1)
+            return float(paved[r, c].mean()), float(apron[r, c].mean())
+
+        def crisp(points, widest=0.3):
+            """Is this a white line: bright, no wider than widest, and standing clear of the ground on both sides?"""
+            offsets = np.arange(-0.6, 0.6 + 1e-9, 0.025)
+            profile = photoprofile.across(raw, raster, points, offsets, [photoprofile.brightness])[2][0].mean(0)
+            found = photoprofile.band(profile, offsets, 0.1, 0.3, 18.0)
+            if found is None or found[1] > widest:
+                return False
+            top = profile[np.abs(offsets) <= 0.1].max()
+            return bool(top - max(np.median(profile[offsets < -0.3]), np.median(profile[offsets > 0.3])) >= 18.0)
+
+        def out_of_sight(points):
+            """Which points lie under a crown or in one of the scan's holes."""
+            points = np.asarray(points, float)
+            r = np.clip(((raster["y1"] - points[:, 1]) / cell).astype(int), 0, hidden.shape[0] - 1)
+            c = np.clip(((points[:, 0] - raster["x0"]) / cell).astype(int), 0, hidden.shape[1] - 1)
+            return hidden[r, c]
+
+        # A pole leaning out over the pavement is a thin white line too. Those strokes are
+        # the pole: its picture is painted out to their full length, and they are not paint.
+        leaning = poles.pictures(things["poles"], found_paint, crisp)
+        if leaning:
+            found_paint = [s for n, s in enumerate(found_paint) if n not in leaning]
+            _paint_out(painted, raster, poles.footprint(things["poles"], raster, painted.shape[:2]) & ~taken, on_road, grains, taken)
+            log(f"  {len(leaning)} of those are light poles leaning over the pavement, painted out with the rest of the pole")
+        # What is painted out is the paint as traced. What is drawn is the paint as fitted.
+        traced = markmodel.footprint(found_paint, raster, painted.shape[:2]) & on_road
+        fitted = markings_tidy.tidy(found_paint, log, shaded, paint_view(raw, matte, raster, paved), (where, crisp))
         fitted = markings_stalls.regularise(fitted, lambda x, y: bool(on_road[int((raster["y1"] - y) / raster["res"]), int((x - raster["x0"]) / raster["res"])]),
                                             markings_stalls.evidence(raw, raster, taken), log)[0]
-        things["markings"], put_back = markings_regular.fill(fitted, paint_can_be_at)
+        fitted, put_back = markings_regular.fill(fitted, paint_can_be_at)
         log(f"  {put_back} dashes put back into runs they were missing from")
+        # Double yellow lines are read from the photo afresh, and the whole width of each is
+        # painted out: the trace knew of one line where there are two.
+        things["markings"], bands = markings_solid.redraw(fitted, raw, raster, out_of_sight, log)
+        traced |= markmodel.footprint(bands, raster, painted.shape[:2]) & on_road
         fill.repaint_tiled(painted, raster, traced, grains[1])
         metres = {colour: sum(railmodel.length_of(m["points"]) for m in things["markings"] if m["colour"] == colour) for colour in ("yellow", "white")}
         log(f"  painted out {len(things['markings'])} strokes of road paint: {metres['yellow']:.0f} m yellow, {metres['white']:.0f} m white")
@@ -276,11 +316,12 @@ def prepare(work, ref, raster, deshadow=True, without=(), log=print):
     traced = g["paved"]
     unseen = pavement.to_fine(hidden, paved.shape, cell)
     shade = np.zeros_like(paved) if matte is None else (np.asarray(matte[::k_fine, ::k_fine]) > 64)[:paved.shape[0], :paved.shape[1]]
+    drawn = None
     if things["markings"]:
-        distance, paved = roads.straighten(distance, raster, things["markings"], log, unseen | shade)
+        distance, paved, drawn = roads.straighten(distance, raster, things["markings"], log, unseen | shade)
     modelled = pavement.to_cells(paved, g["valid"].shape, cell)
     plain = pavement.to_fine(g["smooth"] & g["known"], paved.shape, cell) & ~shade
-    distance, paved = outline.unkink(distance, raster, log, unseen, plain)
+    distance, paved = outline.unkink(distance, raster, log, unseen, plain, drawn)
     g["paved"] = pavement.to_cells(paved, g["valid"].shape, cell)
     # What a crown hid has its fringe beside it: flecks of leaf and sun on the pavement
     # round a bite that has just been filled. A metre and a half round it is repainted too.
@@ -289,12 +330,21 @@ def prepare(work, ref, raster, deshadow=True, without=(), log=print):
     changed = (modelled ^ traced) | gained | fringe | (modelled & ~g["paved"] & (g["standing"] | g["holes"]))
     changed = ndimage.binary_dilation(changed, iterations=1) & g["inside"]
     if changed.any():
-        painted = fill.repaint(painted, raster, changed, g["source"] & ~changed, g["paved"], grains, cell, solid=changed)
+        painted = fill.repaint(painted, raster, changed, g["source"] & ~changed, g["paved"], grains, cell, solid=changed, paved_fine=paved)
     np.save(os.path.join(work, "pavement.npy"), paved)
+    # Last, what a tree left on the pavement that none of the above took: flecks and scraps.
+    if matte is not None:
+        soft_shade = (np.asarray(matte[::k_fine, ::k_fine]) > 32)[:paved.shape[0], :paved.shape[1]]
+        wide = distance >= edgelines.APRON
+        on_apron = ndimage.distance_transform_edt(~wide) * pavement.RES <= edgelines.APRON + edgelines.STOP if wide.any() else np.zeros_like(paved)
+        fill.unspot(painted, raster, paved, unseen | soft_shade | pavement.to_fine(changed, paved.shape, cell), grains[1], log, paved & ~on_apron)
 
     # Edge lines: not painted on the real track, drawn along every road as an option.
     if "edgelines" not in without:
-        scanned = pavement.to_fine(ndimage.binary_erosion(g["valid"], iterations=int(round(3.0 / cell))), paved.shape, cell)
+        # The scan's outer edge is not a road's edge. A hole in the scan under a crown is not the scan's edge.
+        scanned = pavement.to_fine(ndimage.binary_erosion(g["inside"], iterations=int(round(3.0 / cell))), paved.shape, cell)
+        # Nor round the end of a drive that stops at a building's door.
+        scanned &= ~pavement.to_fine(ndimage.binary_dilation(obj["buildings"], iterations=int(round(5.0 / cell))), paved.shape, cell)
         things["edge_lines"] = edgelines.find(distance, raster, scanned, [b for b in things["barriers"] if b["type"] == "guardrail"], log)
 
     matched, filled = compose.surround_and_blend(painted, whole, raster, ref.aerial())
