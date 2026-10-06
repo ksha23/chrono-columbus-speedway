@@ -162,6 +162,15 @@ echo "cecba2a6e15e049e8d5630aad17255504243d14fa2ec98ed799eb6aab61c4b3c  speedway
 mkdir scene && tar -xzf speedway_scene_base.tar.gz -C scene
 ```
 
+While this repository is private, neither that nor the script's own download works without
+credentials. With the GitHub CLI signed in to an account that can see it:
+
+```sh
+gh release download v2 --repo ksha23/chrono-columbus-speedway
+mkdir scene && tar -xzf speedway_scene_base.tar.gz -C scene
+python speedway.py --data scene
+```
+
 ## How the scene was built
 
 The source is a drone photogrammetry scan of the site: a single textured mesh of 456,280
