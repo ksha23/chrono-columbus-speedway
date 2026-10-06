@@ -1,0 +1,6 @@
+scene/
+scene.partial/
+scene.download
+scene.v*/
+__pycache__/
+.DS_Store
