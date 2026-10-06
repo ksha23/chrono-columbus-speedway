@@ -402,6 +402,16 @@ def main(argv):
     _log(f"{raster}: {rgb.shape[1]} x {rgb.shape[0]} at {res:g} m, {100.0 * valid.mean():.1f}% covered")
     info = {}
     out, shadow = remove_shadows(rgb, height, res, valid, sun=suns or None, log=_log, debug=info)
+    # Keep the suns for the steps that measure things by their shadows: each as it was found
+    # in the picture, and the nearest position the real sun took that day.
+    record = []
+    for s in info.get("suns", []):
+        y, m, d = SITE["date"]
+        _, az, el, _ = geom.closest_solar_time(SITE["lat"], SITE["lon"], y, m, d, s["azimuth"], s["elevation"])
+        record.append({"azimuth": round(float(s["azimuth"]), 2), "elevation": round(float(s["elevation"]), 2),
+                       "real_azimuth": round(float(az), 2), "real_elevation": round(float(el), 2)})
+    with open(os.path.join(out_dir, "suns.json"), "w") as f:
+        json.dump(record, f, indent=1)
     for s in info.get("suns", []):
         print(f"  sun azimuth {s['azimuth']:.1f} elevation {s['elevation']:.1f}"
               + (f" ({100 * s['weight']:.0f}% of the evidence)" if "weight" in s else "")

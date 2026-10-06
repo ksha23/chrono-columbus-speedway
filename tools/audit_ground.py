@@ -51,6 +51,9 @@ def main():
     raster = json.load(open(os.path.join(work, "raster.json")))
     photo = np.load(os.path.join(work, "ground_photo.npy"), mmap_mode="r")
     paved = np.load(os.path.join(work, "pavement.npy"))
+    # Nothing on the ground is black. A black patch is a fill that drew no colour in.
+    black = sum(int((np.asarray(photo[r0:r0 + 1024]).max(-1) < 40).sum()) for r0 in range(0, photo.shape[0], 1024))
+    print(f"near-black ground anywhere in the photo: {black * raster['res'] ** 2:.1f} m2")
     ratio = darkness(photo, paved, raster["res"])
     dark = np.nan_to_num(ratio, nan=1.0) < DARK
     labels, count = ndimage.label(dark, structure=np.ones((3, 3)))

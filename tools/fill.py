@@ -14,11 +14,15 @@ GRAIN_BLUR = 0.6     # metres: grain is the photo minus itself blurred this much
 FEATHER = 0.5        # metres over which a repainted patch fades into the photo
 
 
-def carry_colour(small, known):
+def carry_colour(small, known, need=0.25):
     """Fill the unknown cells of a low-resolution picture from the known cells around them.
 
     Blurs at doubling radii, each normalised by how much known ground it saw. Near an edge the
     narrow blur wins, so local colour is kept, and deep inside a patch the wide ones take over.
+    need is the share of a blur's reach that must be known ground for that blur to be taken
+    whole. A road is a strip a few metres wide, so the known cells of one are never a large
+    share of any neighbourhood, and its colour is carried with a small need: otherwise the
+    colour of a stretch comes from pavement a hundred metres off.
     """
     img = small.astype(np.float32)
     w = known.astype(np.float32)
@@ -27,8 +31,44 @@ def carry_colour(small, known):
     for sigma in (128, 64, 32, 16, 8, 4, 2):
         ww = ndimage.gaussian_filter(w, sigma)
         blurred = np.stack([ndimage.gaussian_filter(img[..., c] * w, sigma) for c in range(3)], -1) / np.maximum(ww[..., None], 1e-6)
-        alpha = np.clip(ww / 0.25, 0, 1)[..., None]
+        alpha = np.clip(ww / need, 0, 1)[..., None]
         out = alpha * blurred + (1 - alpha) * out
+    return out
+
+
+STRIP = 0.03         # carry_colour's need for pavement: see there
+
+
+ODD = 3.0            # times the grain's own spread: anything standing out by more is not grain
+
+
+def _plain(grain):
+    """The grain with everything that is not grain taken out of it.
+
+    The cleanest square of pavement on the site still has a joint across it, a crack, a tyre
+    mark, a painted line. Borrowed as grain, each of those is stamped onto every patch that is
+    repainted, the same crack and the same line again and again. They stand out from the grain
+    around them, at the scale of a line and at the scale of a stain, so that is how they are
+    found, and they are overwritten with grain from another part of the square.
+    """
+    out = grain.copy()
+    n = grain.shape[0]
+    for _ in range(3):      # what is brought in may carry the end of a crack with it
+        odd = np.zeros(out.shape[:2], bool)
+        for sigma, grow in ((1.0, 3), (4.0, 6)):
+            soft = np.stack([ndimage.gaussian_filter(out[..., ch], sigma) for ch in range(3)], -1)
+            soft -= np.median(soft, axis=(0, 1))
+            spread = 1.4826 * np.median(np.abs(soft), axis=(0, 1))
+            odd |= ndimage.binary_dilation((np.abs(soft) > ODD * np.maximum(spread, 1e-3)).any(-1), iterations=grow)
+        if not odd.any():
+            break
+        was = out.copy()
+        for dr, dc in ((n // 2, n // 3), (n // 3, n // 2), (n // 5, 2 * n // 3), (2 * n // 3, n // 7)):
+            other, other_odd = np.roll(was, (dr, dc), (0, 1)), np.roll(odd, (dr, dc), (0, 1))
+            take = odd & ~other_odd
+            out[take] = other[take]
+            odd = odd & ~take
+        out[odd] = 0.0
     return out
 
 
@@ -48,7 +88,7 @@ def find_grain(photo, raster, usable_cells, cell, want):
     r0, c0 = (r - n // 2) * k, (c - n // 2) * k
     patch = np.asarray(photo[r0:r0 + size, c0:c0 + size], dtype=np.float32)
     sigma = GRAIN_BLUR / raster["res"]
-    grain = patch - np.stack([ndimage.gaussian_filter(patch[..., ch], sigma, mode="reflect") for ch in range(3)], -1)
+    grain = _plain(patch - np.stack([ndimage.gaussian_filter(patch[..., ch], sigma, mode="reflect") for ch in range(3)], -1))
     # Mirror into a 2x2 block, which then repeats without a seam.
     top = np.concatenate([grain, grain[:, ::-1]], axis=1)
     return np.concatenate([top, top[::-1]], axis=0)
@@ -68,7 +108,10 @@ def repaint(photo, raster, mask_cells, known_cells, paved_cells, grains, cell, s
     H, W = photo.shape[:2]
     h, w = mask_cells.shape
     small = np.stack([np.asarray(photo[..., ch], dtype=np.float32)[:h * k, :w * k].reshape(h, k, w, k).mean((1, 3)) for ch in range(3)], -1)
-    colour = np.where(paved_cells[..., None], carry_colour(small, known_cells & paved_cells), carry_colour(small, known_cells & ~paved_cells))
+    # A cell on the pavement's edge is part pavement and part grass, and is neither's colour.
+    inside = ndimage.binary_erosion(paved_cells, iterations=2)
+    outside = ~ndimage.binary_dilation(paved_cells, iterations=2)
+    colour = np.where(paved_cells[..., None], carry_colour(small, known_cells & inside, STRIP), carry_colour(small, known_cells & outside))
     paved_like = paved_cells.astype(np.float32)
 
     soft = np.clip(ndimage.gaussian_filter(ndimage.binary_dilation(mask_cells, iterations=1).astype(np.float32), FEATHER / cell) * 1.6, 0, 1)
@@ -96,6 +139,24 @@ def repaint(photo, raster, mask_cells, known_cells, paved_cells, grains, cell, s
     return out
 
 
+def _drawn_in(window, known):
+    """A picture of the window with every pixel coloured from the known pixels around it.
+
+    Starts from the average of all that is known, so that the middle of a wide hole gets a
+    colour at all, then lets nearer colour take over wherever it reaches: wide blurs first,
+    narrow ones last. Pixels with no data in the photo count as unknown.
+    """
+    w = known.astype(np.float32)
+    out = np.empty_like(window)
+    out[:] = (window * w[..., None]).sum((0, 1)) / max(float(w.sum()), 1.0)
+    for sigma in (64, 32, 16, 8, 4, 2):
+        ww = ndimage.gaussian_filter(w, sigma)
+        blurred = np.stack([ndimage.gaussian_filter(window[..., ch] * w, sigma) for ch in range(3)], -1) / np.maximum(ww[..., None], 1e-6)
+        alpha = np.clip(ww / 0.3, 0, 1)[..., None]
+        out = alpha * blurred + (1 - alpha) * out
+    return out
+
+
 def repaint_small(photo, raster, mask, grain, margin=0.15):
     """Paint out small things on pavement in place: cones, and the short shadows beside them.
 
@@ -113,13 +174,7 @@ def repaint_small(photo, raster, mask, grain, margin=0.15):
         c0, c1 = max(sl[1].start - pad, 0), min(sl[1].stop + pad, W)
         hole = ndimage.binary_dilation(mask[r0:r1, c0:c1], iterations=grow)
         window = photo[r0:r1, c0:c1].astype(np.float32)
-        known = (~hole).astype(np.float32)
-        fillc = np.zeros_like(window)
-        for sigma in (16, 8, 4, 2):   # wide first, then let nearer colour take over where it reaches
-            ww = ndimage.gaussian_filter(known, sigma)
-            blurred = np.stack([ndimage.gaussian_filter(window[..., ch] * known, sigma) for ch in range(3)], -1) / np.maximum(ww[..., None], 1e-6)
-            alpha = np.clip(ww / 0.3, 0, 1)[..., None]
-            fillc = alpha * blurred + (1 - alpha) * fillc
+        fillc = _drawn_in(window, ~hole & (window.max(-1) > 0))
         rows = (np.arange(r0, r1) % period)[:, None]
         cols = (np.arange(c0, c1) % period)[None, :]
         painted = np.clip(fillc + grain[rows, cols], 0, 255)
@@ -185,7 +240,7 @@ def _flatten(band, weight, tone, fleck, grain, res, texture=None, keep=1.0):
 KEEP = {"paved": 0.0, "land": 1.0, "water": 1.0}    # how much fine detail a levelled patch keeps
 
 
-def even_out(photo, raster, shadow, known_cells, paved_cells, water_cells, cell, paved_fine, grains=None, before=None):
+def even_out(photo, raster, shadow, known_cells, paved_cells, water_cells, cell, paved_fine, grains=None, before=None, plain_cells=None):
     """Level what is left of a shadow after relighting, and return the result.
 
     Relighting multiplies a shadow back up, which is right for a shadow with a clean edge and
@@ -200,7 +255,9 @@ def even_out(photo, raster, shadow, known_cells, paved_cells, water_cells, cell,
     exactly on the pavement's edge. grains is the pair of grain tiles from find_grain, grass
     then pavement, used to make up the texture the second pass takes out. before is the photo
     as it was ahead of relighting: relighting also brightens a fringe around each shadow that
-    the matte does not cover, and comparing the two shows where.
+    the matte does not cover, and comparing the two shows where. plain_cells marks the cells
+    of paved_cells that are nothing but pavement: a cell on a road's edge is part grass, and
+    a tone taken from there turns every levelled patch on the road dark and brown.
     """
     k = int(round(cell / raster["res"]))
     res = raster["res"]
@@ -216,14 +273,20 @@ def even_out(photo, raster, shadow, known_cells, paved_cells, water_cells, cell,
         amount = np.maximum(amount, np.clip(np.abs(small - was).max(-1) / 12.0, 0, 1))
     # The reference is ground well clear of any shadow. Right beside one, relighting leaves a
     # pale rim, and a tone taken from there would make every levelled patch too bright.
-    sunlit = known_cells & (ndimage.maximum_filter(amount, 2 * int(round(2.0 / cell)) + 1) < 0.02)
+    # With the photo from before relighting to compare against, that rim is already counted
+    # as shadow, and half a metre of margin is enough. That keeps the sunlit gaps between
+    # the shadows of a row of trees, which are the best reference a shaded road has.
+    margin = 0.5 if before is not None else 2.0
+    sunlit = known_cells & (ndimage.maximum_filter(amount, 2 * int(round(margin / cell)) + 1) < 0.02)
     kinds = {"paved": paved_cells, "water": water_cells & ~paved_cells, "land": ~paved_cells & ~water_cells}
     textures = {"paved": None, "land": None, "water": None} if grains is None else {"paved": grains[1], "land": grains[0], "water": None}
     tones, levels = {}, {}
     ratio = np.ones_like(small)
+    trusted = {"paved": paved_cells if plain_cells is None else plain_cells, "water": kinds["water"],
+               "land": kinds["land"] & ~ndimage.binary_dilation(paved_cells, iterations=2)}
     for name, kind in kinds.items():
-        tones[name] = carry_colour(small, sunlit & kind)
-        levels[name] = _sunlit_grain(photo, raster, sunlit & kind, cell, FLECK[name])
+        tones[name] = carry_colour(small, sunlit & trusted[name], STRIP if name == "paved" else 0.25)
+        levels[name] = _sunlit_grain(photo, raster, sunlit & trusted[name], cell, FLECK[name])
         here = known_cells & kind
         local, seen = _blur_over(small, here, 0.5 / cell)
         ok = here & (seen > 0.2)
@@ -266,3 +329,36 @@ def even_out(photo, raster, shadow, known_cells, paved_cells, water_cells, cell,
                 _flatten(band, wt, tone, FLECK[name], levels[name], res, texture, KEEP[name])
         out[r0:r1, :w * k] = np.clip(band + 0.5, 0, 255).astype(np.uint8)
     return out
+
+
+def repaint_tiled(photo, raster, mask, grain, margin=0.08, tile=512):
+    """repaint_small for masks made of long thin things, such as painted lines. In place.
+
+    repaint_small works on each connected patch in its own bounding box, and a line three
+    hundred metres long has a bounding box of thirty million pixels. Here the mask is taken a
+    tile at a time instead, each with enough of its surroundings to draw colour from.
+    """
+    res = raster["res"]
+    grow = int(round(margin / res))
+    pad = int(round(1.2 / res))
+    H, W = mask.shape
+    period = grain.shape[0]
+    done = 0
+    for r in range(0, H, tile):
+        for c in range(0, W, tile):
+            if not mask[r:r + tile, c:c + tile].any():
+                continue
+            r0, r1, c0, c1 = max(r - pad, 0), min(r + tile + pad, H), max(c - pad, 0), min(c + tile + pad, W)
+            hole = ndimage.binary_dilation(mask[r0:r1, c0:c1], iterations=grow)
+            window = photo[r0:r1, c0:c1].astype(np.float32)
+            fillc = _drawn_in(window, ~hole & (window.max(-1) > 0))
+            rows = (np.arange(r0, r1) % period)[:, None]
+            cols = (np.arange(c0, c1) % period)[None, :]
+            painted = np.clip(fillc + grain[rows, cols], 0, 255)
+            soft = np.clip(ndimage.gaussian_filter(hole.astype(np.float32), 1.0) * 1.5, 0, 1)[..., None]
+            # Only this tile's own pixels are written: its neighbours do theirs.
+            inner = (slice(r - r0, r - r0 + min(tile, H - r)), slice(c - c0, c - c0 + min(tile, W - c)))
+            out = (window * (1 - soft) + painted * soft + 0.5).astype(np.uint8)
+            photo[r:r + tile, c:c + tile] = out[inner]
+            done += 1
+    return done

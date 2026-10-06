@@ -14,7 +14,7 @@ curl -LO https://raw.githubusercontent.com/ksha23/chrono-columbus-speedway/main/
 python speedway.py
 ```
 
-The first run downloads the scene (96 MB) into `scene/` beside the script, checks its
+The first run downloads the scene (97 MB) into `scene/` beside the script, checks its
 SHA-256 and unpacks it. Later runs start in a few seconds.
 
 Hold **W** to accelerate and **S** to brake, and hold **A** or **D** to steer. Let go and the car
@@ -22,8 +22,9 @@ coasts and the wheel centres, as in a driving game.
 
 | Option | |
 | --- | --- |
-| `--no-cones` | leave the traffic cones out |
-| `--no-trees` | leave the trees out |
+| `--no-trees`, `--no-cones`, `--no-poles`, `--no-vehicles`, `--no-barriers`, `--no-props` | leave out the trees, the traffic cones, the light poles, the parked vehicles, the guard rails and fence, or the small structures |
+| `--no-markings` | leave out the road paint: bare concrete, for laying out lanes of your own |
+| `--no-edge-lines` | leave out the white lines along the road edges. They are an addition: the real track has none |
 | `--textures low\|standard` | ground photo at 10 cm or 5 cm per pixel, default `standard` |
 | `--offroad-friction MU` | friction off the pavement, which has 0.9. Default: 0.9 everywhere. See below for what it costs |
 | `--no-shadows` | do not draw shadows. Worth trying on a slow GPU |
@@ -64,8 +65,9 @@ z = speedway.ground_height(scene, x, y)       # ground height there
 ```
 
 - `add_scenery` puts every placement on a few fixed bodies as visual shapes. Pass
-  `groups=["Road", "Terrain"]` to load only some of `Road`, `Terrain`, `Buildings`, `Trees` and
-  `Cones`. Cones are their own group so they can be left out and replaced with your own layout.
+  `groups=["Road", "Terrain"]` to load only some of `Road`, `Terrain`, `Buildings`, `Trees`,
+  `Cones`, `Poles`, `Vehicles`, `Barriers`, `Props`, `Markings` and `EdgeLines`. Each kind of
+  object is its own group so it can be left out and replaced with a layout of your own.
 - `add_ground` returns an initialized `RigidTerrain` over one mesh: pavement, grass, banks and
   the fields around. They are the same triangles the scenery draws, so what you see is what you
   drive on. Pass `offroad_friction=0.6` to get the pavement and the rest as two patches with
@@ -75,7 +77,8 @@ z = speedway.ground_height(scene, x, y)       # ground height there
 - The site keeps its real elevation. The track is near **z = 295 m**, not z = 0. Use
   `ground_height` to place things: `RigidTerrain.GetHeight` returns 0 until the first
   `DoStepDynamics`.
-- Trees, buildings and cones are drawn and nothing else. They have no collision shapes.
+- Everything but the ground is drawn and nothing else: trees, buildings, cones, poles, rails
+  and parked cars have no collision shapes.
 - `speedway.manifest(scene)` is everything else the scene records, as a dict. See below.
 - For Chrono::Sensor, every material carries a class id. `speedway.labels(scene)` says what
   each id means.
@@ -87,10 +90,10 @@ works directly with `RigidTerrain::AddPatch`, and so do `speedway_road.obj` and
 ## What is in the scene
 
 ```
-speedway_scene.json    manifest: 114 assets, 1,005 placements in 5 groups
-speedway_ground.obj    the ground as one welded collision mesh, 644,162 triangles
-speedway_road.obj      the pavement's 79,708 of those triangles
-speedway_terrain.obj   the other 564,454
+speedway_scene.json    manifest: 140 assets, 1,181 placements in 11 groups
+speedway_ground.obj    the ground as one welded collision mesh, 643,906 triangles
+speedway_road.obj      the pavement's 78,692 of those triangles
+speedway_terrain.obj   the other 565,214
 ground/                the same triangles split by texture tile, with texture coordinates
 textures/standard/     ground photo at 5 cm per pixel, one JPEG per tile
 textures/low/          the same at 10 cm
@@ -98,6 +101,12 @@ textures/surround.jpg  aerial imagery for the land beyond the scan
 trees/                 54 generated tree models, wood and leaves apart
 buildings/             4 buildings, walls and textured roof apart
 cones/                 one traffic cone, body and base apart
+poles/                 light poles, one model per height
+vehicles/              parked cars: 3 models made from the vehicle meshes Chrono ships
+barriers/              guard rails and the fence round the property, each built in place
+props/                 one block, placed and sized for each small structure
+markings/              road paint as two meshes, yellow and white, and strokes.json.
+                       The edge lines as a third, and edge_lines.json
 ```
 
 Lengths are metres. x is east, y is north and z is up, which is Chrono's own frame. The origin
@@ -110,10 +119,11 @@ The manifest looks like this:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "frame": { "utm_zone": 16, "origin_easting": 329450.0, "origin_northing": 4794560.0,
              "extent": [-640.0, -512.0, 640.0, 512.0] },
-  "labels": ["Road", "Terrain", "Buildings", "Trees", "Cones"],
+  "labels": ["Road", "Terrain", "Buildings", "Trees", "Cones", "Poles", "Vehicles", "Barriers",
+             "Props", "Markings", "EdgeLines"],
   "collision": { "ground": "speedway_ground.obj", "road": "speedway_road.obj",
                  "terrain": "speedway_terrain.obj" },
   "start": { "x": -49.95, "y": -79.23, "yaw": 0.72 },
@@ -147,8 +157,8 @@ The manifest looks like this:
 To fetch the scene without the script:
 
 ```sh
-curl -LO https://github.com/ksha23/chrono-columbus-speedway/releases/download/v1/speedway_scene_base.tar.gz
-echo "f04eaf63d3105225cce767aa64f5777f5175448753728bf981900fc14f29c03a  speedway_scene_base.tar.gz" | shasum -a 256 -c
+curl -LO https://github.com/ksha23/chrono-columbus-speedway/releases/download/v2/speedway_scene_base.tar.gz
+echo "cecba2a6e15e049e8d5630aad17255504243d14fa2ec98ed799eb6aab61c4b3c  speedway_scene_base.tar.gz" | shasum -a 256 -c
 mkdir scene && tar -xzf speedway_scene_base.tar.gz -C scene
 ```
 
@@ -179,33 +189,117 @@ That figure is the limit of the check as much as of the fit, since the imagery w
 **The photo is redrawn from above** in the corrected frame at 5 cm per pixel, and then cleaned:
 
 - *Shadows.* The photographed shadows are relit and then levelled to the tone of the sunlit
-  ground around them, so the renderer's own shadows are the only ones. The mosaic was flown at
-  two times of day, around midday and mid-afternoon by the shadow directions, and each half is
-  treated with its own sun. The thin shadows of light poles, posts and fences are not in the
-  scan's heights at all, so they are found in the picture as straight dark lines and painted
-  out separately.
-- *Cones.* 124 traffic cones are found by colour on the pavement, painted out together with
-  their shadows, and stood back up as models at the same spots. A cone's height comes from the
-  length of the shadow it cast.
+  ground around them, so the renderer's own shadows are the only ones. On pavement that tone
+  is taken from well inside the road, clear of its edges, and the dapple under a tree is
+  replaced outright with plain concrete. The mosaic was flown at two times of day, around
+  midday and mid-afternoon by the shadow directions, and each half is treated with its own
+  sun. The thin shadows of light poles, posts and fences are not in the scan's heights at all,
+  so they are found in the picture as straight dark lines and painted out separately.
+- *Whatever stood on the ground.* A thing photographed from above is a flat picture of its
+  top with a shadow beside it. Each kind is found, painted out of the photo together with its
+  shadow, and put back as an object: see the next section.
 - *Trees and buildings.* Whatever stands more than 1.5 m above the lidar ground is a tree or a
-  building. The picture of its top is painted over with the ground around it, and so are the
-  holes the scan left where a canopy was too dense to reconstruct.
+  building, and so is anything from 0.7 m up that stands alone in grass and is the colour of
+  a plant: the site has rows of planted spruces a metre high. The picture of its top is
+  painted over with the ground around it, and so are the holes the scan left where a canopy
+  was too dense to reconstruct.
+
+Every patch that is painted over gets its colour from the ground around it and its grain from
+the cleanest 19 m square of the same surface on the site. Even that square of concrete has a
+joint, a crack, a tyre mark and a painted corner in it, and each would be stamped onto every
+patch, so anything in the square that stands out from its own grain is taken out first.
+
+**Everything that stood on the ground is an object.** What the scan gives for each is where
+it stands and how big it is. The rest is a model.
+
+| | Found by | Put back as |
+| --- | --- | --- |
+| 132 traffic cones | colour on the pavement: orange, lime green or brick red. Height from the length of the shadow | Chrono's traffic cone, scaled and coloured |
+| 21 light poles | the shadow: a straight dark line a few metres long, a hand wide, pointing away from the sun, with the pole's own flattened picture at its foot. Height from the shadow's length and the sun's elevation | a generated pole: footing, tapered shaft, arm and lamp, the arm out over the nearest pavement |
+| 7 parked vehicles | car-sized things 1.4 to 2.5 m tall on pavement. Colour from the photo, and the front is the lower end | a sedan, a hatchback or an SUV made from the vehicle meshes Chrono ships, in that colour |
+| 609 m of guard rail in 6 pieces | thin lines of galvanised steel, bluer than what they lie on, where the scan shows something under a metre tall | a W-beam on posts, facing the road |
+| the fence, 1,581 m | the same, away from pavement. It shows for 616 m and is carried on between those stretches, since it runs round the whole property. One gate, at the entrance | posts, a top rail and two wires |
+| 5 small structures | colourless, even-topped things up to 3.5 m tall: tanks, a hut, bleachers | a block of the footprint, height and colour measured |
+| 810 strokes of road paint | traced in the photo, then refitted as straights and arcs: see below | ribbons laid 2 cm above the road |
+
+**Road paint is drawn, not photographed.** In the ground's picture a lane line is two texels
+wide, and from a car, at a shallow angle, the renderer's texture filtering smears it away.
+So the paint is traced in the photo, taken out of it, and drawn as its own geometry, which
+stays sharp at any distance.
+
+What is drawn is not the trace. A trace is true to the photo: a line worn through in the
+middle comes back as two, a rectangle's sides stop short of its corners, a curve carries the
+wobble of its pixels. Paint is laid by machine along a string or round a pin, so each stroke
+is refitted as what it must have been: straight segments and circular arcs meeting at sharp
+corners. Pieces of one line are joined across worn gaps, ends are carried on to the line they
+stop short of, and the dashes of a run are laid on one smooth curve at one length. A solid
+line that runs under a tree comes out of the trace in two pieces: they are joined if they
+point at each other and the photo does not show bare road between them (3 joins).
+Short strokes alone in a tree's dapple are flecks of sun, and are dropped (18). Where a lane
+line's run has a gap of exactly two or three spacings, under a tree's shadow for instance, the
+missing dashes are put back: 4 of them.
+
+Parking stalls get the same treatment as a row. Their lines are the faintest paint on the
+site, white on concrete the sun has bleached nearly as white, and tracing finds only some of
+each row and often only part of a line. A row of stalls is parallel lines one pitch apart, all
+of one length, so each row is fitted as that, and the photo is then asked the easier question
+of whether there is paint along each line the row predicts. 4 rows were found, at a
+pitch of 2.7 m, and 31 lines are drawn where 19 had been traced. The strokes travel with the scene as
+`markings/strokes.json`: 1,386 m of yellow and 797 m of white in 810 strokes, in
+scene coordinates, for anyone who wants the lane geometry as data.
+
+**Edge lines are an addition.** The real track has no painted edge lines. The scene has them
+as an option, on by default: a white line 10 cm wide along both edges of every road, 3,473 m
+in all, 30 cm in from the pavement's edge, following the kerb round each junction and running
+inside the guard rail where there is one. A line does not follow a jog in the outline: it is
+carried across on a smooth curve if that keeps it on the pavement, and broken there if not. The skid pad and the car parks have none. They are
+their own group, `EdgeLines`, with `--no-edge-lines` to leave them out, and their centre lines
+are in `markings/edge_lines.json`.
 
 **Road and land are separate meshes.** The pavement's outline is taken from the photo and the
-ground mesh is cut along it, so every triangle is either road or not. Where a tree's crown hid
-the road's edge from the drone, the edge is carried straight across the gap, and where a hedge
-took a row of bites out of it, they are filled along the direction the edge runs.
+ground mesh is cut along it, so every triangle is either road or not.
 
-**Trees are generated.** 407 crowns are measured in the scan. A crown too wide to be one tree
-is replanted as several, which gives 822 trees. Each is a generated model chosen by its shape
+**A road is a strip of one width about its centre line.** Traced from the photo, a road's edge
+is good to a few centimetres in the open and wrong by up to a metre wherever a tree's shadow
+or crown lay over the kerb: the trace takes a bite out of the road or bulges into the grass.
+The centre line is known, though: it is the yellow line, already fitted to a smooth curve. So
+along each of the 13 centre lines the distance to the traced edge is measured on both
+sides, metre by metre, the road's half width on each side is taken to be the running median
+of those measurements over 30 m, and the outline is redrawn at that width: 2,723 m of
+edge in all. Junctions keep their traced outline, since there the edge really does curve away.
+Where the outline moves, the photo is repainted to match.
+
+An edge that was only ever seen in shade is not trusted for that. Along the north road a
+gravel shoulder lies in the shadow of a tree line for a hundred metres, and relit it passes
+for concrete. Where fewer than two in five of the stations within reach saw their edge in
+plain light, the road is taken to be as wide on that side as on the other: 737 m of
+edge were drawn that way.
+
+Three more rules tidy what that leaves, for the stretches with no centre line.
+
+- A guard rail stands on the road's edge, so pavement that was only guessed at under a hedge
+  is not carried on beyond one.
+- A kerb runs on. Where the outline steps aside and comes back within a few metres, round a
+  bush or the mouth of a footpath, the notch is cut out and its two ends are joined by a
+  smooth curve. 61 kinks were taken out this way.
+- Under a crown the edge is a guess, but it is in view before the crown and again after it,
+  if only in glimpses between one bush and the next. A gentle curve is fitted through what
+  was seen of the edge either side, passing by any bush that takes a notch out of it, and the
+  unseen stretch is redrawn along that curve: 19 stretches.
+
+None of the three argues with ground the photo shows plainly. A wedge of mown grass between
+two roads is a notch in the pavement in every way but that one, and it stays.
+
+**Trees are generated.** 535 crowns are measured in the scan. A crown too wide to be one tree
+is replanted as several, which gives 949 trees. Each is a generated model chosen by its shape
 (broadleaf, upright, willow, shrub), stretched to the measured height and crown width, and
 coloured with the leaf colour the drone saw. No tree reaches over the pavement: one whose crown
 would is stepped back from the road by up to 4 m, and whatever still crosses the edge is taken
 off its width. Real crowns do hang over these roads, but a generated tree does not know to
-grow up and over a lane, and its branches would hang in it at windscreen height. The 387 trees whose crowns come within 12 m of pavement get the full model,
-up to 7,000 triangles. The other 435 get one with 40% of the triangles, because stock
+grow up and over a lane, and its branches would hang in it at windscreen height. The 421 trees whose crowns come within 12 m of pavement get the full model,
+up to 7,000 triangles. The other 528 get one with 40% of the triangles, because stock
 Chrono::VSG draws every triangle of every tree again for each shadow map. An earlier build
-with every tree at full detail ran at 16 frames a second on an M4 Pro. This one holds 50.
+with every tree at full detail ran at 16 frames a second on an M4 Pro. This one holds 46 to 49.
 
 **Buildings are refitted** as a rectangle with straight walls and a gable roof, from the scan's
 roof heights. The roof keeps its own photograph. The walls get one flat colour.
@@ -219,11 +313,14 @@ in linear terms, and a cast shadow is 0.24 as bright as the sunlit ground beside
 texture and colour in the scene is stored with the inverse of that applied.
 
 That 0.70 is also a ceiling, and the light cannot be turned up past it: nothing lying on the
-ground can show brighter than sRGB 218. The drone exposed the concrete at about 200 and the
-paint on it at 240 and more. Stored as they are, white paint and concrete both hit the ceiling
-and the line disappears, and yellow paint loses its red and turns pale. So the scene is shown a
-little darker than the photo, at 0.8 of its brightness in linear light, which puts the concrete
-near 180 and leaves the paint room to stand out. `tools/renderer.py` has the numbers.
+ground can show brighter than sRGB 218. The drone flew at midday and exposed the concrete at
+200 to 235, with the paint on it at 240 and more. Stored as they are, white paint and concrete
+both hit the ceiling and the line disappears. So the ground is shown a little darker than the
+photo, at 0.8 of its brightness in linear light, and its highlights are rolled off so that no
+part of it passes sRGB 187. Painted lines are drawn at the ceiling, which leaves white paint
+about one and a half times as bright as the concrete under it. The cost is that the bleached
+look of the concrete at midday is gone: it reads as ordinary grey. `tools/renderer.py` has
+the numbers.
 
 It also draws one side of a triangle only. Leaves are single triangles meant to be seen from
 both sides, and `add_scenery` sets `SetDoubleFaced(True)` on them.
@@ -231,31 +328,61 @@ both sides, and `add_scenery` sets `SetDoubleFaced(True)` on them.
 ### Rebuilding it
 
 `tools/` holds the whole pipeline, and `tools/build_all.sh` runs it from the scan to the
-archive in 16 minutes on an M4 Pro. It needs numpy, scipy, Pillow and PyChrono, and about 15 GB
-of memory. Every step is seeded: a second run from scratch gave the same archive, byte for byte.
-The script ends by checking the scene (`check_scene.py`: no tree on or over the road, every
-cone on it, no hole in the ground) and listing what is still dark on the pavement
-(`audit_ground.py`).
+archive in 25 minutes on an M4 Pro. It needs numpy, scipy, Pillow and PyChrono, and about
+15 GB of memory. Every step is seeded: a second run from scratch gave the same archive, byte
+for byte. The script ends by checking the scene (`check_scene.py`: no tree on or over the
+road, cones, cars and paint on it, poles and fence off it, no hole in the ground) and listing
+what is still dark on the pavement (`audit_ground.py`). `audit_lines.py` draws every painted
+line on the finished ground from above and circles each kink left in an edge line.
 `tools/fetch_reference.sh` downloads the USGS data. The scan itself is not in this repository.
 
 ## What is not right
 
 - **Buildings are boxes.** No doors, windows or wall detail, and the wall colour is a guess
-  from the little the drone saw of them. Fences, guard rails, light poles and parked vehicles
-  are not modelled at all. The vehicles are painted out of the photo. A light pole is still in
-  it, as a faint line lying on the ground where the scan flattened it.
+  from the little the drone saw of them. The tanks, the hut and the bleachers are plainer
+  still: one block each.
+- **Road paint is found by a program, and it misses some.** Most of the small ruler ticks on
+  the skid pad, the odd dash, and in the car parks the hatching, the accessible-bay symbols
+  and any stall line hidden under a parked car at the end of its row. Stall lines are drawn at
+  their row's full length, so a line that really is shorter than its neighbours is not. Every
+  yellow line is drawn 10 cm wide, where the real ones measure 11 to 17 cm. The edge lines follow the
+  pavement's outline as the photo shows it, smoothed, so they are only as true as that
+  outline: good on open road, less so where a hedge or a shadow hid the edge.
+- **Objects are stand-ins.** The scan says where a thing stood and how big it was, not what
+  it was. A parked crossover is drawn with Chrono's SUV scaled down, a car with its sedan or
+  hatchback. Every light pole is the same design at a different height. Heights come from
+  shadow lengths and are good to about half a metre.
+- **Some light poles are missing.** A pole is found only where its shadow falls on open ground
+  beside pavement and its own picture shows at its foot. 21 were found. Ones standing in a
+  hedge or behind a guard rail were not, and their shadows are still in the photo.
+- **The fence is three fifths guesswork.** It shows in the scan for 616 m of its 1,581 m. The
+  rest runs under trees and is drawn straight between the stretches that show. The chain link
+  itself is not drawn, only posts, top rail and wires, because a see-through panel throws a
+  solid shadow in this renderer.
 - **Trees are stylised.** Up close a leaf is a plain triangle about half a metre long. Species
   are guessed from crown shape. A tree beside a road is narrower than the real one, because its
   crown is made to stop at the pavement's edge. In the woods south of the track the scan could not separate
   crowns, so those trees are spread evenly over the canopy it saw, and thinner than the real
   woods. Trees away from the road are visibly sparser if you drive up to them.
-- **The road's edge wanders.** It follows the grass line in the photo, which is ragged by a
-  few tenths of a metre, and under tree shadows it is less certain than that.
-- **Shadow removal leaves traces.** Where a tree's shadow crossed the road the dapple was
-  levelled out and its texture made up with grain borrowed from clean concrete, so cracks and
-  joints are missing there. Thin shadows are painted out wherever a straight dark line three
+- **Road edges are modelled where there is a centre line, traced where there is not.** Short
+  connecting roads with no yellow line, junction corners and the aprons keep the outline the
+  photo gave with its notches taken out, which still wanders by a few tenths of a metre. The
+  model assumes a road keeps its width over 30 m, and that it is as wide on one side of its
+  centre line as on the other wherever one side was in shade. 16 small kinks are
+  left in the edge lines, none over 20 degrees.
+- **Some trees are only a picture.** Where the scan could not build a crown it printed the
+  crown flat on the ground under it. There is no height to find, so no tree is planted and
+  the picture stays, as a dark green patch on the verge. Where such a crown lay over a road
+  the road is redrawn under it, as above.
+- **Small things are still in the picture.** A pile of rubble, a heap of junk by the entrance
+  and the debris on the gravel lot beside it lie flat in the photo. Nothing stands in for
+  them.
+- **Shadow removal leaves traces.** Where a tree's shadow crossed the road the pavement is
+  plain concrete of the right tone with borrowed grain, so cracks, joints and stains are
+  missing there and the patch is cleaner than the road around it. Thin shadows are painted out wherever a straight dark line three
   metres long was found, which takes a few sealed cracks with it.
-- **Nothing has collision but the ground.** A car drives through trees, cones and buildings.
+- **Nothing has collision but the ground.** A car drives through trees, cones, rails, parked
+  cars and buildings.
 - **The road is as smooth as the lidar.** Joints, cracks and patches are in the picture and not
   in the surface. The lidar has 1 m posts.
 - **The surround is a different photograph.** Beyond the scan the ground is USGS aerial imagery
@@ -265,9 +392,9 @@ cone on it, no hole in the ground) and listing what is still dark on the pavemen
 ## Tested with
 
 PyChrono 10.0.0 from the `projectchrono` channel, conda build `py313_1187`, on macOS (Apple
-silicon). On an M4 Pro the demo holds real time at 50 frames a second, which is the script's
-cap, with shadows on. It uses 6.8 GB of memory, or 4.8 GB with `--textures low`. Linux and
-Windows have not been tried.
+silicon). On an M4 Pro the demo holds real time at FPS frames a second with shadows on (50 is
+the script's cap). It uses 4.7 GB of memory, or 3.6 GB with `--textures low`. Linux
+and Windows have not been tried.
 
 ## Licence and credit
 
@@ -281,7 +408,8 @@ The scene is built from:
   <!-- Who flew it and under what terms it may be shared goes here before this is published. -->
 - The [USGS 3D Elevation Program](https://www.usgs.gov/3d-elevation-program) lidar elevation
   model and [NAIP](https://naip-usdaonline.hub.arcgis.com/) aerial imagery, both public domain.
-- The traffic cone model from [Project Chrono](https://projectchrono.org)'s data directory,
-  BSD 3-Clause.
+- The traffic cone and the vehicle meshes (sedan, Audi, Nissan Patrol) from
+  [Project Chrono](https://projectchrono.org)'s data directory, BSD 3-Clause. The parked cars
+  are those meshes regrouped by material, reduced, and given simpler wheels.
 
 This repository is not affiliated with Columbus 151 Speedway or its owners.

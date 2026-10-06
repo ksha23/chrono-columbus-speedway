@@ -37,9 +37,9 @@ import urllib.request
 
 # The published scene: one pinned archive, checked against its hash before anything is unpacked,
 # so a changed or truncated download fails here and not later as a half-loaded scene.
-RELEASE = "https://github.com/ksha23/chrono-columbus-speedway/releases/download/v1/"
+RELEASE = "https://github.com/ksha23/chrono-columbus-speedway/releases/download/v2/"
 SCENE_URL = RELEASE + "speedway_scene_base.tar.gz"
-SCENE_SHA256 = "f04eaf63d3105225cce767aa64f5777f5175448753728bf981900fc14f29c03a"
+SCENE_SHA256 = "cecba2a6e15e049e8d5630aad17255504243d14fa2ec98ed799eb6aab61c4b3c"
 SCENE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scene")
 
 MANIFEST = "speedway_scene.json"
@@ -55,10 +55,22 @@ MARKER = ".speedway-scene"
 TEXTURES = {"low": 0.10, "standard": 0.05}
 
 # What the scenery is made of. add_scenery(groups=...) takes any of these.
-GROUPS = ["Road", "Terrain", "Buildings", "Trees", "Cones"]
+GROUPS = ["Road", "Terrain", "Buildings", "Trees", "Cones", "Poles", "Vehicles", "Barriers", "Props", "Markings", "EdgeLines"]
+
+# The groups the demo can leave out, each with a --no-... option: option, group, what it is.
+OPTIONAL = [
+    ("trees", "Trees", "the trees"),
+    ("cones", "Cones", "the traffic cones"),
+    ("poles", "Poles", "the light poles"),
+    ("vehicles", "Vehicles", "the parked vehicles"),
+    ("barriers", "Barriers", "the guard rails and the fence"),
+    ("props", "Props", "the small structures: tanks, a hut, bleachers"),
+    ("markings", "Markings", "the road paint, for bare concrete to lay out lanes of your own"),
+    ("edge-lines", "EdgeLines", "the white lines along the road edges. They are an addition: the real track has none"),
+]
 
 # The scene format this script expects. fetch() replaces an older scene it installed itself.
-SCENE_VERSION = 1
+SCENE_VERSION = 2
 
 # Where the car starts if the scene does not say: x, y in metres and yaw in radians. The site
 # keeps its real elevation, so the ground is near z = 295 m and not z = 0.
@@ -178,7 +190,7 @@ def _remove(path):
 
 
 def add_scenery(system, scene_dir, textures="standard", groups=None, verbose=True):
-    """Add everything you see: the road and the land around it, trees, buildings and cones.
+    """Add everything you see: the road and the land around it, and all that stands on them.
 
     The manifest lists meshes and the placements they appear at. Each mesh becomes one visual
     shape, added to a body once per placement, so its triangles are loaded once however often it
@@ -186,7 +198,7 @@ def add_scenery(system, scene_dir, textures="standard", groups=None, verbose=Tru
     solver, and the driving surface is a separate object: see add_ground.
 
     textures picks the ground photo's detail, one of TEXTURES. groups, if given, keeps only
-    those manifest groups, out of GROUPS: "Road", "Terrain", "Buildings", "Trees" and "Cones".
+    those manifest groups, out of GROUPS.
 
     Every part's material also gets a class id for Chrono::Sensor's segmentation camera.
     labels(scene_dir) lists what the ids mean.
@@ -393,8 +405,8 @@ def main():
     )
     parser.add_argument("--data", metavar="DIR", default=SCENE_DIR, help="scene directory, downloaded into if empty (default: scene/ beside this file)")
     parser.add_argument("--textures", choices=list(TEXTURES), default="standard", help=TEXTURES_HELP)
-    parser.add_argument("--no-trees", action="store_true", help="leave the trees out")
-    parser.add_argument("--no-cones", action="store_true", help="leave the traffic cones out")
+    for flag, _, what in OPTIONAL:
+        parser.add_argument(f"--no-{flag}", action="store_true", help=f"leave out {what}")
     parser.add_argument("--no-sky", action="store_true", help="plain background instead of the sky dome")
     parser.add_argument("--no-shadows", action="store_true", help="do not draw shadows. Worth trying on a slow GPU: stock Chrono redraws the scene for every shadow map")
     parser.add_argument("--offroad-friction", metavar="MU", type=float, default=None, help="friction off the pavement. The pavement has 0.9.\nGiving this splits the ground into two collision meshes, which slows the physics (default: 0.9 everywhere)")
@@ -432,9 +444,7 @@ def main():
     system.SetMaxPenetrationRecoverySpeed(4.0)
 
     if not args.headless:
-        leave_out = {"Trees"} if args.no_trees else set()
-        if args.no_cones:
-            leave_out.add("Cones")
+        leave_out = {group for flag, group, _ in OPTIONAL if getattr(args, "no_" + flag.replace("-", "_"))}
         add_scenery(system, scene, args.textures, groups=[g for g in GROUPS if g not in leave_out])
     terrain = add_ground(system, scene, offroad_friction=args.offroad_friction)
 

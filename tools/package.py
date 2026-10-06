@@ -27,6 +27,7 @@ def referenced(scene, doc):
     """(files every scene needs, {level: that level's texture files}), relative to scene."""
     always, by_level = {MANIFEST}, {level: set() for level in doc["texture_levels"]}
     always.update(doc["collision"].values())
+    always.update(doc.get("files", []))      # data that travels with the scene but is not drawn
     for asset in doc["assets"]:
         for part in asset["parts"]:
             always.add(part["mesh"])

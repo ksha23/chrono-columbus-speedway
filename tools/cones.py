@@ -13,9 +13,12 @@ MIN_AREA, MAX_AREA = 0.0075, 0.8   # square metres of coloured patch that can be
 # Hue range in degrees, then the least saturation and brightness that count. The green cones
 # photographed dark and dull on top with only a bright rim, so green is taken more loosely.
 # That is safe because a green patch must also throw a shadow to count as a cone.
-KINDS = {"green": (95.0, 165.0, 0.30, 0.30), "orange": (5.0, 40.0, 0.55, 0.45)}
+# Some of the tall cones photographed a dull brick red, far from the orange of the small ones.
+# That is taken more loosely too, and on the same condition: it must throw a shadow. A hue
+# range that starts above where it ends runs through 360.
+KINDS = {"green": (95.0, 165.0, 0.30, 0.30), "orange": (5.0, 40.0, 0.55, 0.45), "red": (345.0, 28.0, 0.33, 0.30)}
 
-LIME, ORANGE = (0.35, 0.85, 0.25), (0.95, 0.35, 0.10)
+LIME, ORANGE, RED = (0.35, 0.85, 0.25), (0.95, 0.35, 0.10), (0.80, 0.24, 0.12)
 # Cones come in standard heights. Each is listed with the longest shadow that still counts as
 # that size. The flight was near solar noon in mid-September, sun about 49 degrees up, so a
 # shadow is about 0.87 of the cone's height, and its thin tip fades out of the photo early.
@@ -48,7 +51,8 @@ def coloured_patches(photo, raster, search_cells, cell):
         where = np.pad(where, ((0, 0), (0, W - where.shape[1])))
         hue, sat, val = hue_sat(np.asarray(photo[r0:r1], dtype=np.float32) / 255)
         for n, (lo, hi, min_sat, min_val) in enumerate(KINDS.values(), start=1):
-            hit = where & (hue >= lo) & (hue <= hi) & (sat > min_sat) & (val > min_val)
+            in_range = (hue >= lo) & (hue <= hi) if lo <= hi else (hue >= lo) | (hue <= hi)
+            hit = where & in_range & (sat > min_sat) & (val > min_val) & (kind[r0:r1] == 0)
             mask[r0:r1] |= hit
             kind[r0:r1][hit] = n
     # A green cone is a bright rim around a dark middle: close the rim and count the middle in.
@@ -59,8 +63,8 @@ def measure(window_rgb, patch, kinds, res):
     """Look at one patch in its surroundings. Returns None if it is not a cone.
 
     window_rgb is the photo around the patch as floats, patch the patch's own pixels in that
-    window, kinds the colour code of every pixel. Returns (shadow length in metres, True if
-    the cone is mostly green).
+    window, kinds the colour code of every pixel. Returns (shadow length in metres, the cone's
+    colour as one of the names in KINDS, the shadow's pixels).
     """
     _, sat, val = hue_sat(window_rgb)
     near = int(round(0.6 / res))
@@ -82,6 +86,13 @@ def measure(window_rgb, patch, kinds, res):
 
     green = int((kinds[patch] == 1).sum())
     orange = int((kinds[patch] == 2).sum())
+    red = int((kinds[patch] == 3).sum())
+    if orange == 0 and red > green:
+        # Brick red on pavement is also a rust stain or a dead leaf. Only a shadow of some
+        # length makes it a cone.
+        if shadow.sum() < 8 or length < 0.25:
+            return None
+        return length, "red", shadow
     if orange == 0:
         # Two other things are green patches ringed by pavement: weeds in the joints, and
         # squares painted on the pad to mark where cones go. Neither stands up. A cone throws a
@@ -93,7 +104,7 @@ def measure(window_rgb, patch, kinds, res):
             return None
     # A small cone is an orange dot inside a thin green edge. Anything larger with a wide green
     # rim is a green cone, whatever else is on it: some carry a red pointer.
-    return length, green * res * res >= 0.06 or orange == 0, shadow
+    return length, "green" if green * res * res >= 0.06 or orange == 0 else "orange", shadow
 
 
 def find(photo, raster, paved_cells, blocked_cells, cell):
@@ -122,11 +133,13 @@ def find(photo, raster, paved_cells, blocked_cells, cell):
         seen = measure(np.asarray(photo[r0:r1, c0:c1], dtype=np.float32) / 255, patch, kind[r0:r1, c0:c1], res)
         if seen is None:
             continue
-        length, green, shadow = seen
+        length, colour, shadow = seen
+        green = colour == "green"
         height = next(h for limit, h in SIZES if length <= limit)
-        if area < 0.05:
+        if area < 0.05 and colour != "red":
             # A tall cone has a wide base. A small patch with a long dark streak beside it is a
-            # small cone standing next to a crack or a pole's shadow.
+            # small cone standing next to a crack or a pole's shadow. (A red one shows only
+            # part of itself as red, so its patch says nothing about its base.)
             height = min(height, 0.46)
         if length == 0.0 and green:
             height = 0.71     # no shadow found, so go by what the other green ones measured
@@ -135,5 +148,6 @@ def find(photo, raster, paved_cells, blocked_cells, cell):
         remove[r0:r1, c0:c1] |= patch | shadow
         cones.append({"x": float(raster["x0"] + (c0 + cols.mean() + 0.5) * res), "y": float(raster["y1"] - (r0 + rows.mean() + 0.5) * res),
                       "height": height, "shadow": round(length, 2),
-                      "body": ORANGE if (small or not green) else LIME, "base": LIME if (small or green) else ORANGE})
+                      "body": RED if colour == "red" else ORANGE if (small or not green) else LIME,
+                      "base": LIME if (small or green or colour == "red") else ORANGE})
     return cones, remove

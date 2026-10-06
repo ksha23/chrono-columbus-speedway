@@ -22,14 +22,19 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import blocks  # noqa: E402
 import buildings  # noqa: E402
+import carmodels  # noqa: E402
 import cone_model  # noqa: E402
 import cones  # noqa: E402
 import forest  # noqa: E402
 import ground  # noqa: E402
 import groundphoto  # noqa: E402
 import objects  # noqa: E402
+import polemodel  # noqa: E402
+import railmodel  # noqa: E402
 import layout  # noqa: E402
+import markmodel  # noqa: E402
 import reference  # noqa: E402
 import renderer  # noqa: E402
 import tiles  # noqa: E402
@@ -43,6 +48,19 @@ COLLISION = {"ground": "speedway_ground.obj", "road": "speedway_road.obj", "terr
 MANIFEST = "speedway_scene.json"
 
 
+PARKED = ("sedan", "hatchback", "suv")   # the models parked cars are drawn from. Chrono's van is a 1970s microbus
+TALL_VEHICLE = 1.8    # metres: models at least this tall are the SUVs, vans and pickups
+TALL_SEEN = 1.6       # and vehicles the scan measured at least this tall get one of them
+
+
+def chrono_data(args):
+    """Chrono's data directory: as given, or wherever the installed PyChrono keeps it."""
+    if args.chrono_data is None:
+        import pychrono
+        args.chrono_data = pychrono.GetChronoDataPath()
+    return args.chrono_data
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("work")
@@ -52,6 +70,7 @@ def main():
     parser.add_argument("--scan", default=None, help="the scan directory, needed to read wall colours")
     parser.add_argument("--chrono-data", default=None, help="Chrono's data directory, for the cone model (default: ask the installed PyChrono)")
     parser.add_argument("--save-photo", action="store_true", help="also write the finished ground photo and the pavement map to WORK_DIR, for audit_ground.py")
+    parser.add_argument("--without", default="", help="comma-separated kinds of thing to leave alone, out of poles, vehicles, blocks, barriers, markings, edgelines")
     parser.add_argument("--keep-shadows", action="store_true", help="publish the photo with its shadows still in")
     args = parser.parse_args()
     start = time.perf_counter()
@@ -61,11 +80,10 @@ def main():
     t = transform.Transform(args.work)
     os.makedirs(args.scene, exist_ok=True)
 
-    filled, matched, found_cones, masks, edge = groundphoto.prepare(args.work, ref, raster, deshadow=not args.keep_shadows)
+    filled, matched, things, masks, edge = groundphoto.prepare(args.work, ref, raster, deshadow=not args.keep_shadows, without=set(filter(None, args.without.split(","))))
     print(f"[{time.perf_counter() - start:5.1f} s] ground photo ready")
     if args.save_photo:
         np.save(os.path.join(args.work, "ground_photo.npy"), filled)
-        np.save(os.path.join(args.work, "pavement.npy"), edge.distance > 0)
 
     os.makedirs(os.path.join(args.scene, "textures"), exist_ok=True)
     tiles.save_texture(matched, os.path.join(args.scene, "textures", "surround.jpg"))
@@ -81,7 +99,7 @@ def main():
     parts = g.write_visual(os.path.join(args.scene, "ground"))
     print(f"[{time.perf_counter() - start:5.1f} s] ground: {len(g.vertices)} vertices, {len(g.road)} road triangles, {len(g.land)} land triangles")
 
-    assets, instances = [], []
+    assets, instances, extra_files = [], [], []
     for name in sorted(parts):
         group, tile = parts[name][0], parts[name][1]
         texture = "textures/surround.jpg" if tile is None else f"textures/<level>/{name}.jpg"
@@ -148,12 +166,130 @@ def main():
     print(f"[{time.perf_counter() - start:5.1f} s] {len(placements)} trees from {len(index)} models ({full} full, {len(placements) - full} light), {drawn / 1e6:.2f} M triangles: "
           + ", ".join(f"{sum(p['kind'] == kk for p in placements)} {kk}" for kk in kinds))
 
+    # Light poles, one model per height, each with its arm out over the nearest pavement.
+    by_height = {}
+    for n, p in enumerate(things["poles"]):
+        tall = round(p["height"] * 2) / 2
+        if tall not in by_height:
+            name, _ = polemodel.write(tall, os.path.join(args.scene, "poles"))
+            by_height[tall] = len(assets)
+            assets.append({"name": name, "parts": [{"name": part, "mesh": f"poles/{name}_{part}.obj", "roughness_value": 0.9 if part == "footing" else 0.5,
+                                                    "colour": [round(v, 3) for v in renderer.colour_for_renderer(polemodel.COLOURS[part])]}
+                                                   for part in ("footing", "pole", "lamp")]})
+        slope = np.array([edge.at(p["x"] + 0.5, p["y"]) - edge.at(p["x"] - 0.5, p["y"]), edge.at(p["x"], p["y"] + 0.5) - edge.at(p["x"], p["y"] - 0.5)], float)
+        yaw = float(np.arctan2(slope[1], slope[0])) if np.hypot(*slope) > 1e-6 else 0.0
+        instances.append({"asset": by_height[tall], "group": "Poles", "name": f"pole_{n:02d}", "height": tall,
+                          "pos": [round(p["x"], 2), round(p["y"], 2), round(float(ref.elevation(p["x"], p["y"])), 3)],
+                          "rot": [round(float(np.cos(yaw / 2)), 5), 0.0, 0.0, round(float(np.sin(yaw / 2)), 5)], "scale": [1.0, 1.0, 1.0]})
+    print(f"[{time.perf_counter() - start:5.1f} s] {len(things['poles'])} light poles in {len(by_height)} heights:"
+          f" {', '.join(f'{h:g}' for h in sorted(by_height))} m")
+
+    # Parked vehicles: models made from the meshes Chrono ships, in the colour the drone saw.
+    if things["vehicles"]:
+        models = [m for m in carmodels.build(chrono_data(args), os.path.join(args.scene, "vehicles")) if m["name"] in PARKED]
+        # The scan cannot tell a make. It can tell a tall vehicle from a low one, so the tall
+        # ones get the tall models and the low ones the low, taking turns among them. A model
+        # is then scaled toward the height measured, by 15% at most: Chrono's SUV is a large
+        # off-roader, and what stands in a car park is mostly a size smaller.
+        models.sort(key=lambda m: (m["height"], m["name"]))
+        low = [m for m in models if m["height"] < TALL_VEHICLE] or models
+        tall = [m for m in models if m["height"] >= TALL_VEHICLE] or models
+        placed, turn = {}, {"low": 0, "tall": 0}
+        for n, car in enumerate(things["vehicles"]):
+            kind = "tall" if car["height"] >= TALL_SEEN else "low"
+            choices = tall if kind == "tall" else low
+            model = choices[turn[kind] % len(choices)]
+            turn[kind] += 1
+            if model["name"] not in placed:
+                placed[model["name"]] = len(assets)
+                assets.append({"name": model["name"], "parts": [
+                    {"name": p["name"], "mesh": f"vehicles/{p['mesh']}", "colour": [round(float(v), 3) for v in p["colour"]],
+                     "roughness_value": p.get("roughness", 0.5), "metallic_value": p.get("metallic", 0.0)} for p in model["parts"]]})
+            paint = {p["name"]: [round(v, 3) for v in renderer.colour_for_renderer(car["colour"])] for p in model["parts"] if p.get("paint")}
+            size = round(float(np.clip(car["height"] / model["height"], 0.85, 1.05)), 3)
+            instances.append({"asset": placed[model["name"]], "group": "Vehicles", "name": f"vehicle_{n:02d}", "model": model["name"],
+                              "pos": [round(car["x"], 2), round(car["y"], 2), round(float(ref.elevation(car["x"], car["y"])), 3)],
+                              "rot": [round(float(np.cos(car["yaw"] / 2)), 5), 0.0, 0.0, round(float(np.sin(car["yaw"] / 2)), 5)],
+                              "scale": [size, size, size], "colours": paint})
+        print(f"[{time.perf_counter() - start:5.1f} s] {len(things['vehicles'])} parked vehicles: " + ", ".join(i["model"] for i in instances if i["group"] == "Vehicles"))
+
+    # Small structures, each a block of the size and colour the scan gives it.
+    if things["blocks"]:
+        os.makedirs(os.path.join(args.scene, "props"), exist_ok=True)
+        blocks.write_unit(os.path.join(args.scene, "props", "block.obj"))
+        assets.append({"name": "block", "parts": [{"name": "block", "mesh": "props/block.obj", "colour": [0.8, 0.8, 0.8], "roughness_value": 0.8}]})
+        for n, b in enumerate(things["blocks"]):
+            instances.append({"asset": len(assets) - 1, "group": "Props", "name": f"block_{n:02d}",
+                              "pos": [round(b["x"], 2), round(b["y"], 2), round(float(ref.elevation(b["x"], b["y"])), 3)],
+                              "rot": [round(float(np.cos(b["yaw"] / 2)), 5), 0.0, 0.0, round(float(np.sin(b["yaw"] / 2)), 5)],
+                              "scale": [b["length"], b["width"], b["height"]],
+                              "colours": {"block": [round(v, 3) for v in renderer.colour_for_renderer(b["colour"])]}})
+        print(f"[{time.perf_counter() - start:5.1f} s] {len(things['blocks'])} small structures as blocks")
+
+    # Guard rails and fence, each built in place along the line it was found on.
+    if things["barriers"]:
+        os.makedirs(os.path.join(args.scene, "barriers"), exist_ok=True)
+        metres, drawn = {"guardrail": 0.0, "fence": 0.0}, 0
+        # A guard rail stands at the pavement's edge. The fence stands clear of all pavement.
+        runs = [(b, run if b["type"] == "guardrail" else railmodel.fence_line(run, edge.at).tolist())
+                for b in things["barriers"] for run in railmodel.standing_runs(b)]
+        for n, (b, run) in enumerate(runs):
+            pts = np.asarray(run, float)
+            k = len(pts) // 2
+            step = pts[min(k, len(pts) - 1)] - pts[max(k - 1, 0)]
+            left = np.array([-step[1], step[0]]) / max(np.hypot(*step), 1e-9)
+            mid = (pts[min(k, len(pts) - 1)] + pts[max(k - 1, 0)]) / 2
+            # The pavement is on whichever side of the line is nearer to it.
+            road_side = 1.0 if edge.at(*(mid + 1.5 * left)) >= edge.at(*(mid - 1.5 * left)) else -1.0
+            parts = railmodel.make(b["type"], run, b["height"], ref.elevation, road_side)
+            if parts is None:
+                continue
+            name = f"{'rail' if b['type'] == 'guardrail' else 'fence'}_{n:02d}"
+            asset = {"name": name, "parts": []}
+            for part, (v, f) in parts.items():
+                drawn += railmodel.write_obj(os.path.join(args.scene, "barriers", f"{name}_{part}.obj"), v, f)
+                asset["parts"].append({"name": part, "mesh": f"barriers/{name}_{part}.obj", "roughness_value": 0.45, "double_sided": part == "beam",
+                                       "colour": [round(c, 3) for c in renderer.colour_for_renderer(railmodel.COLOURS[part])]})
+            assets.append(asset)
+            metres[b["type"]] += railmodel.length_of(run)
+            seen = sum(railmodel.length_of(r) for r in railmodel.seen_runs(b)) if "seen" in b else railmodel.length_of(run)
+            instances.append({"asset": len(assets) - 1, "group": "Barriers", "name": name, "type": b["type"], "length": round(railmodel.length_of(run), 1),
+                              "seen_length": round(seen, 1), "pos": [0.0, 0.0, 0.0], "rot": [1.0, 0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]})
+        print(f"[{time.perf_counter() - start:5.1f} s] barriers: {metres['guardrail']:.0f} m of guard rail, {metres['fence']:.0f} m of fence, {drawn} triangles")
+
+    # Road paint, as ribbons laid on the pavement.
+    road = markmodel.Road(g.vertices, g.road)
+    if things["markings"]:
+        os.makedirs(os.path.join(args.scene, "markings"), exist_ok=True)
+        drawn = 0
+        for colour, (v, f) in markmodel.make(things["markings"], ref, road).items():
+            drawn += markmodel.write_obj(os.path.join(args.scene, "markings", f"paint_{colour}.obj"), v, f)
+            assets.append({"name": f"paint_{colour}", "parts": [{"name": "paint", "mesh": f"markings/paint_{colour}.obj", "roughness_value": 0.9,
+                                                                 "colour": [round(c, 3) for c in renderer.colour_for_renderer(markmodel.COLOURS[colour])]}]})
+            instances.append({"asset": len(assets) - 1, "group": "Markings", "name": f"paint_{colour}", "pos": [0.0, 0.0, 0.0], "rot": [1.0, 0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]})
+        # The strokes themselves travel with the scene: they are the lane geometry, as data.
+        with open(os.path.join(args.scene, "markings", "strokes.json"), "w") as f:
+            json.dump(things["markings"], f)
+        extra_files.append("markings/strokes.json")
+        print(f"[{time.perf_counter() - start:5.1f} s] road paint: {len(things['markings'])} strokes, {drawn} triangles")
+
+    # Edge lines along the roads, in a group of their own.
+    if things["edge_lines"]:
+        os.makedirs(os.path.join(args.scene, "markings"), exist_ok=True)
+        v, f = markmodel.make(things["edge_lines"], ref, road)["white"]
+        drawn = markmodel.write_obj(os.path.join(args.scene, "markings", "edge_lines.obj"), v, f)
+        assets.append({"name": "edge_lines", "parts": [{"name": "paint", "mesh": "markings/edge_lines.obj", "roughness_value": 0.9,
+                                                        "colour": [round(c, 3) for c in renderer.colour_for_renderer(markmodel.COLOURS["white"])]}]})
+        instances.append({"asset": len(assets) - 1, "group": "EdgeLines", "name": "edge_lines", "pos": [0.0, 0.0, 0.0], "rot": [1.0, 0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]})
+        with open(os.path.join(args.scene, "markings", "edge_lines.json"), "w") as out:
+            json.dump(things["edge_lines"], out)
+        extra_files.append("markings/edge_lines.json")
+        print(f"[{time.perf_counter() - start:5.1f} s] edge lines: {len(things['edge_lines'])} pieces, {drawn} triangles")
+
     # Cones, stood back up where the scan flattened them.
+    found_cones = things["cones"]
     if found_cones:
-        data = args.chrono_data
-        if data is None:
-            import pychrono
-            data = pychrono.GetChronoDataPath()
+        data = chrono_data(args)
         os.makedirs(os.path.join(args.scene, "cones"), exist_ok=True)
         triangles = cone_model.convert(os.path.join(data, cone_model.SOURCE), os.path.join(args.scene, "cones"))
         assets.append({"name": "cone", "parts": [{"name": part, "mesh": f"cones/cone_{part}.obj", "colour": renderer.colour_for_renderer(cones.ORANGE), "roughness_value": 0.5}
@@ -166,16 +302,17 @@ def main():
         print(f"[{time.perf_counter() - start:5.1f} s] {len(found_cones)} cones, {triangles} triangles each")
 
     manifest = {
-        "version": 1,
+        "version": 2,
         "name": "Columbus 151 Speedway",
         "frame": {
             "description": "x east, y north, z up, metres. z is elevation above sea level (NAVD88).",
             "utm_zone": layout.UTM_ZONE, "origin_easting": layout.ORIGIN_E, "origin_northing": layout.ORIGIN_N,
             "extent": [layout.SCENE_X0, layout.SCENE_Y0, layout.SCENE_X1, layout.SCENE_Y1],
         },
-        "labels": ["Road", "Terrain", "Buildings", "Trees", "Cones"],
+        "labels": ["Road", "Terrain", "Buildings", "Trees", "Cones", "Poles", "Vehicles", "Barriers", "Props", "Markings", "EdgeLines"],
         "texture_levels": {k: layout.LEVELS[k] for k in args.levels.split(",")},
         "collision": COLLISION,
+        "files": extra_files,
         "start": layout.START,
         "assets": assets,
         "instances": instances,

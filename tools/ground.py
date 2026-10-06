@@ -210,6 +210,20 @@ class Ground:
         return out
 
 
+def surface(ref, x, y):
+    """Height of the fine ground mesh at scene points: the triangles' own planes, not the lidar.
+
+    The mesh has a vertex on every whole metre and splits each square along the diagonal from
+    its low corner to its high one. Anything laid on the ground to within millimetres, such as
+    paint, has to follow those triangles and not the smoother surface they were sampled from.
+    """
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    x0, y0 = np.floor(x), np.floor(y)
+    fx, fy = x - x0, y - y0
+    za, zb, zc, ze = ref.elevation(x0, y0), ref.elevation(x0 + 1, y0), ref.elevation(x0 + 1, y0 + 1), ref.elevation(x0, y0 + 1)
+    return np.where(fx >= fy, za + fx * (zb - za) + fy * (zc - zb), za + fx * (zc - ze) + fy * (ze - za))
+
+
 def tile_name(i, j):
     """File stem for tile (i, j). Indices can be negative, so they are spelled out."""
     return f"tile_{'e' if i >= 0 else 'w'}{abs(i)}_{'n' if j >= 0 else 's'}{abs(j)}"

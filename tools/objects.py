@@ -83,13 +83,47 @@ def classify(height, photo_small):
     trees = valid & (h > 1.5) & ~near_building
     trees = ndimage.binary_opening(trees, iterations=1)
 
+    saplings = _saplings(h, valid, rgb, trees | near_building)
+
     # Vehicles and other clutter on open ground: low, compact, not vegetation.
     low = valid & (h > 0.5) & (h <= 2.6) & ~buildings & ~green & ~ndimage.binary_dilation(trees, iterations=4)
     low = ndimage.binary_opening(low, iterations=1)
     labels, count = ndimage.label(low)
     sizes = ndimage.sum(low, labels, index=np.arange(1, count + 1)) * CELL**2
     vehicles = np.isin(labels, 1 + np.nonzero((sizes > 3.0) & (sizes < 40.0))[0])
-    return {"buildings": buildings, "trees": trees, "vehicles": vehicles, "green": green, "rough": rough}
+    return {"buildings": buildings, "trees": trees | saplings, "vehicles": vehicles, "green": green, "rough": rough}
+
+
+SAPLING_TOP = 0.7           # metres: the least a young tree or a bush stands
+SAPLING_AREA = (0.25, 7.0)  # square metres its crown covers, seen from above
+
+
+def _saplings(h, valid, rgb, taken):
+    """Young trees and bushes standing alone in grass, too low to be counted with the trees.
+
+    A row of planted spruces a metre high is as much in the photo as an oak is: a dark dot
+    with a shadow beside it. So anything that rises well clear of the ground on a small
+    footprint, is the colour of a plant, and has low green ground all round it is taken for
+    one. The last condition leaves out tall weeds, which come in stretches, and anything
+    standing on pavement, which is a cone or a post and is found by other means.
+    """
+    smooth = ndimage.gaussian_filter(h, 1.0)
+    rise = valid & (smooth > 0.4) & ~ndimage.binary_dilation(taken, iterations=2)
+    labels, count = ndimage.label(rise)
+    if count == 0:
+        return np.zeros_like(valid)
+    index = np.arange(1, count + 1)
+    area = ndimage.sum(rise, labels, index) * CELL**2
+    top = ndimage.maximum(h, labels, index)
+    colour = np.stack([ndimage.mean(rgb[..., ch], labels, index) for ch in range(3)], axis=1)
+    plant = ((colour[:, 1] >= 0.92 * colour[:, 0]) & (colour[:, 1] > colour[:, 2])) | (colour.max(1) < 0.42)
+    # The ground within a metre and a half of it: low, and green.
+    ring = np.where(labels == 0, ndimage.grey_dilation(labels, size=(13, 13)), 0)
+    low = ndimage.mean((smooth < 0.3).astype(np.float32), ring, index)
+    around = np.stack([ndimage.mean(rgb[..., ch], ring, index) for ch in range(3)], axis=1)
+    grassy = (around[:, 1] > 1.1 * around[:, 2]) & (around[:, 1] >= 0.9 * around[:, 0])
+    keep = (area >= SAPLING_AREA[0]) & (area <= SAPLING_AREA[1]) & (top >= SAPLING_TOP) & plant & (low > 0.8) & grassy
+    return np.isin(labels, index[keep])
 
 
 def find_trees(height, tree_mask, gx, gy):
@@ -104,7 +138,7 @@ def find_trees(height, tree_mask, gx, gy):
     smooth = ndimage.gaussian_filter(h, 0.6 / CELL)
     peaks = np.zeros_like(tree_mask)
     # Three size classes of neighbourhood, chosen by the height at the candidate itself.
-    for lo, hi, radius in [(1.5, 5.0, 1.5), (5.0, 11.0, 2.6), (11.0, 99.0, 3.8)]:
+    for lo, hi, radius in [(0.5, 1.5, 1.0), (1.5, 5.0, 1.5), (5.0, 11.0, 2.6), (11.0, 99.0, 3.8)]:
         k = int(round(radius / CELL))
         yy, xx = np.ogrid[-k:k + 1, -k:k + 1]
         local = ndimage.maximum_filter(smooth, footprint=(xx * xx + yy * yy) <= k * k)
@@ -127,7 +161,9 @@ def find_trees(height, tree_mask, gx, gy):
     top = ndimage.maximum(h, crowns, index=np.arange(1, count + 1))
     trees = []
     for n in range(count):
-        if area[n] < 1.0 or top[n] < 1.5:
+        # A crown's area goes with its height: a metre-high spruce covers a quarter of a
+        # square metre, and a patch that small at the top of an oak is a stray branch.
+        if top[n] < SAPLING_TOP or area[n] < np.clip(0.15 * top[n] ** 2, SAPLING_AREA[0], 1.0):
             continue
         trees.append({"id": n + 1, "x": float(gx[rows[n], cols[n]]), "y": float(gy[rows[n], cols[n]]),
                       "height": float(top[n]), "radius": float(np.sqrt(area[n] / np.pi))})

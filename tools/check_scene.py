@@ -5,7 +5,9 @@
 
   - no tree trunk stands on the road, and no leaf reaches over it
   - no trunk stands inside a building
-  - every cone stands on the road
+  - every cone stands on the road and every parked vehicle on pavement
+  - no light pole stands in the road, and no fence post either
+  - road paint lies on the road, between 0.5 and 4 cm above it
   - the ground has no holes: every edge inside it is shared by two triangles
 """
 import json
@@ -87,6 +89,71 @@ def main():
     print(f"{len(cones)} cones: {off} more than 0.3 m off the road")
     if off:
         failed.append("cones off the road")
+
+    def height_above_road(p):
+        """Height of a 3D point above the road triangle under it, or None if it is not over the road."""
+        for j in centres.query_ball_point(p[:2], reach + 1e-6):
+            a, b, c = rv[rf[j]]
+            det = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1])
+            if abs(det) < 1e-12:
+                continue
+            u = ((b[1] - c[1]) * (p[0] - c[0]) + (c[0] - b[0]) * (p[1] - c[1])) / det
+            v = ((c[1] - a[1]) * (p[0] - c[0]) + (a[0] - c[0]) * (p[1] - c[1])) / det
+            if u >= -1e-9 and v >= -1e-9 and u + v <= 1 + 1e-9:
+                return p[2] - (u * a[2] + v * b[2] + (1 - u - v) * c[2])
+        return None
+
+    def placed(group):
+        return [i for i in doc["instances"] if i["group"] == group]
+
+    cars = placed("Vehicles")
+    # A car's own footprint can be missing from the pavement map where it stood at the edge
+    # of an apron, so the test is that pavement is within a car's half length of its middle.
+    off = sum(distance_to_road(np.array(c["pos"][:2])) > 2.5 for c in cars)
+    print(f"{len(cars)} parked vehicles: {off} not on the pavement")
+    if off:
+        failed.append("vehicles off the road")
+
+    # A pole may stand on the pavement's very edge, where the map of it is a few tenths of a
+    # metre generous. Half a metre in, on every side, is in the road.
+    ring = [0.5 * np.array([np.cos(t), np.sin(t)]) for t in np.arange(8) * np.pi / 4]
+    poles = placed("Poles")
+    inside = sum(all(distance_to_road(np.array(p["pos"][:2]) + r) == 0 for r in ring) for p in poles)
+    print(f"{len(poles)} light poles: {inside} standing in the road")
+    if inside:
+        failed.append("poles in the road")
+
+    fences = [i for i in placed("Barriers") if i["type"] == "fence"]
+    posts_on_road = total_posts = 0
+    for fence in fences:
+        v, _ = read_obj(os.path.join(scene, f"barriers/{fence['name']}_posts.obj"))
+        feet = np.unique(v[:, :2].round(1), axis=0)[::4]
+        total_posts += len(feet)
+        posts_on_road += sum(distance_to_road(p) == 0 for p in feet)
+    rails = [i for i in placed("Barriers") if i["type"] == "guardrail"]
+    print(f"barriers: {sum(r['length'] for r in rails):.0f} m of guard rail in {len(rails)} pieces, {sum(f['length'] for f in fences):.0f} m of fence,"
+          f" of which {sum(f['seen_length'] for f in fences):.0f} m was seen in the scan. Fence posts on the road: {posts_on_road} of about {total_posts} checked")
+    if posts_on_road:
+        failed.append("fence on the road")
+
+    paint = placed("Markings") + placed("EdgeLines")
+    if paint:
+        lifts, loose = [], 0
+        for item in paint:
+            v, _ = read_obj(os.path.join(scene, doc["assets"][item["asset"]]["parts"][0]["mesh"]))
+            for p in v[::max(len(v) // 3000, 1)]:
+                lift = height_above_road(p)
+                if lift is None:
+                    loose += 1
+                else:
+                    lifts.append(lift)
+        lifts = np.array(lifts)
+        print(f"road paint: {len(lifts) + loose} points checked, {loose} not over the road, lift {lifts.min() * 100:.1f} to {lifts.max() * 100:.1f} cm")
+        # Paint is laid 2 cm above the 1 m grid the road was built on. Where the road was cut
+        # along the pavement's edge its triangles are not quite that grid's, so the lift there
+        # differs by up to a centimetre. Half a centimetre still clears the road. Four would show.
+        if loose > 0.01 * (len(lifts) + loose) or lifts.min() < 0.005 or lifts.max() > 0.04:
+            failed.append("road paint off the road or not lying on it")
 
     gv, gf = read_obj(os.path.join(scene, doc["collision"]["ground"]))
     e = np.sort(np.concatenate([gf[:, [0, 1]], gf[:, [1, 2]], gf[:, [2, 0]]]), axis=1)

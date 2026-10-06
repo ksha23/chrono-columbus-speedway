@@ -12,8 +12,8 @@ drone exposed the concrete at about 200, with paint above it at 240 to 250. Stor
 are, paint and concrete would both hit the ceiling and a white line would vanish into the
 pavement, while a yellow one would lose its red and turn pale. So the scene is shown a little
 darker than the photo, by EXPOSURE, which puts the concrete at about 180 and leaves the paint
-room above it. What still goes over the ceiling is scaled down as a whole colour, so it keeps
-its hue.
+room above it. The brightest of the ground is then eased down further (see KNEE and TOP), as
+a whole colour, so it keeps its hue.
 
 for_renderer() prepares a photo this way. The same applies to plain material colours:
 colour_for_renderer().
@@ -39,14 +39,28 @@ def encode(linear):
 
 _TABLE = (decode(np.arange(256) / 255.0) * (EXPOSURE / LIT)).astype(np.float32)
 
+# Highlights are rolled off. The drone flew at midday and the concrete came out bleached, at
+# sRGB 230 and more in places, with the white paint on it barely brighter: the stall lines of
+# the car park are hard to find in the photo itself. Painted lines are drawn as geometry at
+# the brightest the renderer can show, so the ground under them has to stay clearly below
+# that. Texture values up to KNEE are kept and everything above is eased toward TOP, which
+# leaves white paint about one and a half times as bright as the concrete it lies on.
+KNEE, TOP = 0.55, 0.72
+
+
+def _roll_off(value):
+    """Texture values (linear, any size) eased so none passes TOP."""
+    return np.where(value <= KNEE, value, KNEE + (TOP - KNEE) * (1.0 - np.exp(-(value - KNEE) / (TOP - KNEE))))
+
 
 def for_renderer(photo):
     """An sRGB uint8 picture as the texture that makes the renderer show that picture."""
     out = np.empty(photo.shape, np.uint8)
     for r0 in range(0, photo.shape[0], 1024):     # in bands, to keep the float copy small
         value = _TABLE[photo[r0:r0 + 1024]]
-        over = np.maximum(value.max(-1, keepdims=True), 1.0)
-        out[r0:r0 + 1024] = (value / over * 255.0 + 0.5).astype(np.uint8)
+        top = np.maximum(value.max(-1, keepdims=True), 1e-6)
+        # The whole colour is scaled by what its brightest channel is eased by, so it keeps its hue.
+        out[r0:r0 + 1024] = (value * (_roll_off(top) / top) * 255.0 + 0.5).astype(np.uint8)
     return out
 
 
