@@ -142,6 +142,40 @@ def _is_plant(rgb):
     return top > 0.05 and (top - min(r, g, b)) / top > 0.14 and g >= r and b < 0.9 * g
 
 
+def seat(x, y, yaw, wheels, scale, ground_height):
+    """Where a parked vehicle rests: (position, rotation as a quaternion w, x, y, z).
+
+    A model's origin is on the ground under its middle, x forward and z up. Set down level
+    on a slope it stands with two wheels in the air. So the ground's height is taken under
+    each wheel, the plane through those heights is the one the wheels stand on, and the
+    vehicle is tilted to it. wheels is the list of wheel centres in the model's own frame,
+    scale what the model is scaled by, ground_height(xs, ys) the height of the ground mesh.
+    """
+    forward = np.array([np.cos(yaw), np.sin(yaw)])
+    left = np.array([-forward[1], forward[0]])
+    local = scale * np.asarray(wheels, float)[:, :2]
+    spots = np.array([x, y]) + local[:, :1] * forward + local[:, 1:2] * left
+    heights = np.asarray(ground_height(spots[:, 0], spots[:, 1]), float)
+    (level, along, across), *_ = np.linalg.lstsq(np.column_stack([np.ones(len(local)), local]), heights, rcond=None)
+    ahead = np.array([forward[0], forward[1], along])
+    ahead /= np.linalg.norm(ahead)
+    up = np.cross(ahead, np.array([left[0], left[1], across]))
+    up /= np.linalg.norm(up)
+    side = np.cross(up, ahead)
+    m = np.column_stack([ahead, side, up])
+    # The rotation matrix as a quaternion, taking the largest of the four terms first.
+    w = np.sqrt(max(1.0 + m[0, 0] + m[1, 1] + m[2, 2], 0.0)) / 2
+    if w > 0.1:
+        q = [w, (m[2, 1] - m[1, 2]) / (4 * w), (m[0, 2] - m[2, 0]) / (4 * w), (m[1, 0] - m[0, 1]) / (4 * w)]
+    else:                       # half a turn or near it about some axis
+        i = int(np.argmax(np.diag(m)))
+        j, k = (i + 1) % 3, (i + 2) % 3
+        r = np.sqrt(max(1.0 + m[i, i] - m[j, j] - m[k, k], 0.0)) / 2
+        q = [0.0, 0.0, 0.0, 0.0]
+        q[0], q[1 + i], q[1 + j], q[1 + k] = (m[k, j] - m[j, k]) / (4 * r), r, (m[j, i] + m[i, j]) / (4 * r), (m[k, i] + m[i, k]) / (4 * r)
+    return [float(x), float(y), float(level)], [float(v) for v in q]
+
+
 def footprint(cars, raster, shape, photo, sun_list):
     """Full-size mask of what each vehicle left in the photo: itself and its shadow.
 

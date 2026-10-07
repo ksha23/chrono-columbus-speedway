@@ -165,6 +165,50 @@ def main():
     if once != rim or many:
         failed.append("ground mesh is not watertight")
 
+    # Every parked vehicle stands on its wheels: under each of the four, the tyre's lowest
+    # point is on the ground mesh, not in the air above it and not sunk into it.
+    if cars:
+        corners = gv[gf]
+        middles = corners[:, :, :2].mean(1)
+        span = np.hypot(*(corners[:, :, :2] - middles[:, None, :]).transpose(2, 0, 1)).max(1)
+        near_cars = np.zeros(len(gf), bool)
+        for car in cars:
+            near_cars |= np.hypot(*(middles - np.array(car["pos"][:2])).T) < 6.0 + span
+        local = np.nonzero(near_cars)[0]
+        tree = cKDTree(middles[local])
+
+        def ground_under(p):
+            for j in tree.query_ball_point(p[:2], float(span[local].max()) + 1e-6):
+                a, b, c = corners[local[j]]
+                det = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1])
+                if abs(det) < 1e-12:
+                    continue
+                u = ((b[1] - c[1]) * (p[0] - c[0]) + (c[0] - b[0]) * (p[1] - c[1])) / det
+                v = ((c[1] - a[1]) * (p[0] - c[0]) + (a[0] - c[0]) * (p[1] - c[1])) / det
+                if u >= -1e-9 and v >= -1e-9 and u + v <= 1 + 1e-9:
+                    return u * a[2] + v * b[2] + (1 - u - v) * c[2]
+            return None
+
+        gaps = []
+        for car in cars:
+            part = next(p for p in doc["assets"][car["asset"]]["parts"] if p["name"] == "tyres")
+            v, _ = read_obj(os.path.join(scene, part["mesh"]))
+            w, x, y, z = car["rot"]
+            turn = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+                             [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+                             [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
+            placed_at = (v * np.array(car["scale"])) @ turn.T + np.array(car["pos"])
+            for front in (True, False):
+                for left in (True, False):
+                    wheel = placed_at[((v[:, 0] > 0) == front) & ((v[:, 1] > 0) == left)]
+                    lowest = wheel[np.argmin(wheel[:, 2])]
+                    under = ground_under(lowest)
+                    gaps.append(np.nan if under is None else lowest[2] - under)
+        gaps = np.array(gaps)
+        print(f"{len(cars)} parked vehicles: tyres {np.nanmin(gaps) * 100:+.1f} to {np.nanmax(gaps) * 100:+.1f} cm from the ground under them")
+        if not np.isfinite(gaps).all() or np.abs(gaps).max() > 0.03:
+            failed.append("a parked vehicle is not standing on its wheels")
+
     if failed:
         raise SystemExit("FAILED: " + ", ".join(failed))
     print("ok")

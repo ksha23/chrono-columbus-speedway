@@ -40,6 +40,7 @@ import renderer  # noqa: E402
 import tiles  # noqa: E402
 import transform  # noqa: E402
 import treegen  # noqa: E402
+import vehicles  # noqa: E402
 import wall_colour  # noqa: E402
 
 # The ground as one collision mesh, and the same triangles as two, for those who want the
@@ -184,6 +185,12 @@ def main():
     print(f"[{time.perf_counter() - start:5.1f} s] {len(things['poles'])} light poles in {len(by_height)} heights:"
           f" {', '.join(f'{h:g}' for h in sorted(by_height))} m")
 
+    # The pavement's own triangles, for whatever has to lie or stand exactly on them.
+    road = markmodel.Road(g.vertices, g.road)
+
+    def ground_height(xs, ys):
+        return road.height(xs, ys, ground.surface(ref, xs, ys))
+
     # Parked vehicles: models made from the meshes Chrono ships, in the colour the drone saw.
     if things["vehicles"]:
         models = [m for m in carmodels.build(chrono_data(args), os.path.join(args.scene, "vehicles")) if m["name"] in PARKED]
@@ -207,9 +214,10 @@ def main():
                      "roughness_value": p.get("roughness", 0.5), "metallic_value": p.get("metallic", 0.0)} for p in model["parts"]]})
             paint = {p["name"]: [round(v, 3) for v in renderer.colour_for_renderer(car["colour"])] for p in model["parts"] if p.get("paint")}
             size = round(float(np.clip(car["height"] / model["height"], 0.85, 1.05)), 3)
+            # Stood on its four wheels: tilted to the ground under them, not level in the air.
+            pos, rot = vehicles.seat(car["x"], car["y"], car["yaw"], model["wheel_centres"], size, ground_height)
             instances.append({"asset": placed[model["name"]], "group": "Vehicles", "name": f"vehicle_{n:02d}", "model": model["name"],
-                              "pos": [round(car["x"], 2), round(car["y"], 2), round(float(ref.elevation(car["x"], car["y"])), 3)],
-                              "rot": [round(float(np.cos(car["yaw"] / 2)), 5), 0.0, 0.0, round(float(np.sin(car["yaw"] / 2)), 5)],
+                              "pos": [round(pos[0], 2), round(pos[1], 2), round(pos[2], 3)], "rot": [round(v, 5) for v in rot],
                               "scale": [size, size, size], "colours": paint})
         print(f"[{time.perf_counter() - start:5.1f} s] {len(things['vehicles'])} parked vehicles: " + ", ".join(i["model"] for i in instances if i["group"] == "Vehicles"))
 
@@ -258,7 +266,6 @@ def main():
         print(f"[{time.perf_counter() - start:5.1f} s] barriers: {metres['guardrail']:.0f} m of guard rail, {metres['fence']:.0f} m of fence, {drawn} triangles")
 
     # Road paint, as ribbons laid on the pavement.
-    road = markmodel.Road(g.vertices, g.road)
     if things["markings"]:
         os.makedirs(os.path.join(args.scene, "markings"), exist_ok=True)
         drawn = 0
@@ -302,7 +309,7 @@ def main():
         print(f"[{time.perf_counter() - start:5.1f} s] {len(found_cones)} cones, {triangles} triangles each")
 
     manifest = {
-        "version": 3,
+        "version": 4,
         "name": "Columbus 151 Speedway",
         "frame": {
             "description": "x east, y north, z up, metres. z is elevation above sea level (NAVD88).",

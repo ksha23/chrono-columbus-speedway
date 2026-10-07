@@ -6,6 +6,19 @@ PyChrono. Nothing is converted and Chrono is not modified.
 
 ![An Audi on the track in the Chrono VSG window](docs/speedway.jpg)
 
+| | |
+| --- | --- |
+| ![The whole site seen from the south-east](docs/gallery/overview.jpg) | ![The skid pad with its cones and painted courses](docs/gallery/pad.jpg) |
+| The site from the south-east | The skid pad, with its cones and painted courses |
+| ![A double yellow line through an S-bend](docs/gallery/sbend.jpg) | ![A car park with stall lines and a parked car](docs/gallery/carpark.jpg) |
+| The S-bend west of the pad | A car park by the main building |
+| ![A curve with a guard rail on the outside](docs/gallery/pond.jpg) | ![A straight with a dashed centre line](docs/gallery/straight.jpg) |
+| The curve by the pond | The south-east straight |
+| ![A junction with light poles and the fence](docs/gallery/north.jpg) | ![A road with a double yellow line and edge lines](docs/gallery/east.jpg) |
+| The north road at a junction | The east road |
+
+All of these are stock Chrono::VSG, drawn by `tools/look.py` from the scene the script downloads.
+
 ## Run it
 
 ```sh
@@ -119,7 +132,7 @@ The manifest looks like this:
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "frame": { "utm_zone": 16, "origin_easting": 329450.0, "origin_northing": 4794560.0,
              "extent": [-640.0, -512.0, 640.0, 512.0] },
   "labels": ["Road", "Terrain", "Buildings", "Trees", "Cones", "Poles", "Vehicles", "Barriers",
@@ -157,8 +170,8 @@ The manifest looks like this:
 To fetch the scene without the script:
 
 ```sh
-curl -LO https://github.com/ksha23/chrono-columbus-speedway/releases/download/v3/speedway_scene_base.tar.gz
-echo "93d49e458281231c507bb02d8d5a28305e3bbfd8bf6e922d4f214cd5cf0db700  speedway_scene_base.tar.gz" | shasum -a 256 -c
+curl -LO https://github.com/ksha23/chrono-columbus-speedway/releases/download/v4/speedway_scene_base.tar.gz
+echo "aec0c430eff2424e7f6b2a8e30405a45b1f933ef70ef505b01f40a6ca407c5fa  speedway_scene_base.tar.gz" | shasum -a 256 -c
 mkdir scene && tar -xzf speedway_scene_base.tar.gz -C scene
 ```
 
@@ -224,11 +237,11 @@ it stands and how big it is. The rest is a model.
 | --- | --- | --- |
 | 132 traffic cones | colour on the pavement: orange, lime green or brick red. Height from the length of the shadow | Chrono's traffic cone, scaled and coloured |
 | 21 light poles | the shadow: a straight dark line a few metres long, a hand wide, pointing away from the sun, with the pole's own flattened picture at its foot. Height from the shadow's length and the sun's elevation | a generated pole: footing, tapered shaft, arm and lamp, the arm out over the nearest pavement |
-| 7 parked vehicles | car-sized things 1.4 to 2.5 m tall on pavement. Colour from the photo, and the front is the lower end | a sedan, a hatchback or an SUV made from the vehicle meshes Chrono ships, in that colour |
+| 7 parked vehicles | car-sized things 1.4 to 2.5 m tall on pavement. Colour from the photo, and the front is the lower end | a sedan, a hatchback or an SUV made from the vehicle meshes Chrono ships, in that colour, tilted to stand on its four wheels where the ground slopes |
 | 609 m of guard rail in 6 pieces | thin lines of galvanised steel, bluer than what they lie on, where the scan shows something under a metre tall | a W-beam on posts, facing the road |
 | the fence, 1,581 m | the same, away from pavement. It shows for 616 m and is carried on between those stretches, since it runs round the whole property. One gate, at the entrance | posts, a top rail and two wires |
 | 5 small structures | colourless, even-topped things up to 3.5 m tall: tanks, a hut, bleachers | a block of the footprint, height and colour measured |
-| 757 strokes of road paint | traced in the photo, then refitted as straights and arcs: see below | ribbons laid 2 cm above the road |
+| 768 strokes of road paint | traced in the photo, then refitted as straights and arcs: see below | ribbons laid 2 cm above the road |
 
 **Road paint is drawn, not photographed.** In the ground's picture a lane line is two texels
 wide, and from a car, at a shallow angle, the renderer's texture filtering smears it away.
@@ -274,10 +287,13 @@ way. 4 more were poles, and are painted out with the rest of the pole.
 Parking stalls get the same treatment as a row. Their lines are the faintest paint on the
 site, white on concrete the sun has bleached nearly as white, and tracing finds only some of
 each row and often only part of a line. A row of stalls is parallel lines one pitch apart, all
-of one length, so each row is fitted as that, and the photo is then asked the easier question
-of whether there is paint along each line the row predicts. 4 rows were found, at a
-pitch of 2.7 m, and 31 lines are drawn where 19 had been traced. The strokes travel with the scene as
-`markings/strokes.json`: 1,619 m of yellow and 763 m of white in 757 strokes, in
+of one length, so each row is fitted as that. A row takes in every traced line that lies on
+its lattice, however long the gap, since the stalls along one kerb are one row. Every line
+between its first traced line and its last is then drawn, because a row has no line missing
+from its middle, and past its ends the row is followed for as long as the photo shows paint
+along the lines it predicts. 4 rows were found, at a pitch of 2.7 m, and
+43 lines are drawn where 20 had been traced. The strokes travel with the scene as
+`markings/strokes.json`: 1,619 m of yellow and 827 m of white in 768 strokes, in
 scene coordinates, for anyone who wants the lane geometry as data.
 
 **Edge lines are an addition.** The real track has no painted edge lines. The scene has them
@@ -371,7 +387,8 @@ both sides, and `add_scenery` sets `SetDoubleFaced(True)` on them.
 archive in 26 minutes on an M4 Pro. It needs numpy, scipy, Pillow and PyChrono, and about
 15 GB of memory. Every step is seeded: a second run from scratch gave the same archive, byte
 for byte. The script ends by checking the scene (`check_scene.py`: no tree on or over the
-road, cones, cars and paint on it, poles and fence off it, no hole in the ground) and listing
+road, cones, cars and paint on it, every parked car standing on its four wheels, poles and
+fence off it, no hole in the ground) and listing
 what is still dark on the pavement (`audit_ground.py`). `audit_lines.py` draws every painted
 line on the finished ground from above and circles each kink left in an edge line.
 `tools/fetch_reference.sh` downloads the USGS data. The scan itself is not in this repository.
@@ -382,9 +399,14 @@ line on the finished ground from above and circles each kink left in an edge lin
   from the little the drone saw of them. The tanks, the hut and the bleachers are plainer
   still: one block each.
 - **Road paint is found by a program, and it misses some.** Most of the small ruler ticks on
-  the skid pad, the odd dash, and in the car parks the hatching, the accessible-bay symbols
-  and any stall line hidden under a parked car at the end of its row. Stall lines are drawn at
-  their row's full length, so a line that really is shorter than its neighbours is not. Every
+  the skid pad and the odd dash. In the car parks the hatching and the accessible-bay symbols
+  are drawn as traced, a few lines each with ragged ends. Stall lines are drawn at their
+  row's full length, so a line that really is shorter than its neighbours is not, and a row
+  is assumed to have a line at every place between its first and its last.
+- **Thin lines seen from far off break into dashes.** Stock Chrono::VSG draws without
+  antialiasing. A stall line is 10 cm wide, and seen crosswise from 30 m away it is thinner
+  than a pixel, so it shows as a row of dashes that crawl as the car moves. Up close it is
+  solid. Lines that run away from the viewer, as lane lines do, are not affected. Every
   yellow line is drawn 10 cm wide, where the real ones measure 11 to 17 cm. The edge lines follow the
   pavement's outline as the photo shows it, smoothed, so they are only as true as that
   outline: good on open road, less so where a hedge or a shadow hid the edge.

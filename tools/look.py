@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--groups", default=None)
     parser.add_argument("--fov", type=float, default=None)
     parser.add_argument("--sun", type=float, nargs=2, default=None, metavar=("AZIMUTH", "ELEVATION"), help="light direction in degrees")
+    parser.add_argument("--clean", action="store_true", help="no panel and no logo in the picture, for pictures to show")
     args = parser.parse_args()
 
     import pychrono as chrono
@@ -55,6 +56,9 @@ def main():
     if not args.no_shadows:
         vis.EnableShadows()
     vis.EnableSkyTexture()
+    if args.clean:
+        vis.SetGuiVisibility(False)
+        vis.HideLogo()
     vis.Initialize()
     frames = 0
     while vis.Run() and frames < 12:

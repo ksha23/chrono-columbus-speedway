@@ -6,9 +6,10 @@ stalls is the most regular thing there is: parallel lines, one pitch apart, all 
 line and ending on another. So each row is fitted as a row, and then the photo is asked a much
 easier question than "where is there paint": "is there paint along this particular line".
 
-A line is drawn at every position of the row where the photo shows paint along at least a
-third of it, at the row's full length. Beyond the last line found, the row is followed on for
-as long as the photo keeps showing lines.
+A row takes in every traced line that lies on its lattice, however long the gap, and every
+line between its first traced line and its last is drawn, at the row's full length: a row of
+stalls has no line missing from its middle. Beyond the last line found, the row is followed
+on for as long as the photo keeps showing lines.
 """
 import numpy as np
 from scipy import ndimage
@@ -21,6 +22,10 @@ SHOWS = 0.30              # share of a line's visible length along which paint m
 BRIGHTER = 3.0            # grey levels by which paint must outshine the concrete beside it
 BEYOND = 12               # stalls a row is followed past its last traced line, at most
 FULL = 5.8                # metres: no stall line is carried on past this length
+ON_LATTICE = 0.35         # metres off a row's lattice within which a traced line elsewhere along it is the row's
+FAR = 30                  # stalls: the furthest such a line may be beyond the row's end
+PITCH_ERROR = 0.03        # how far out a pitch fitted to three lines may be, as a share of itself
+EDGE = 0.6                # metres of pavement a line added past a row's end must have on either side
 
 
 def evidence(photo, raster, taken=None):
@@ -132,17 +137,85 @@ def _fit_row(seg):
             "lo": float(np.median(lo[full])), "hi": float(np.median(hi[full]))}
 
 
+def _refit(seg, pitch):
+    """One lattice through all the traced lines of a row, however far apart: see _fit_row.
+
+    The pitch is known roughly. Over a gap of ten stalls an error of three centimetres in it
+    puts a line a foot out, so the pitch is searched for within four per cent of the rough
+    one, and the one that leaves the lines nearest their places is taken.
+    """
+    d = seg[:, 1] - seg[:, 0]
+    d[d @ d[int(np.argmax(np.hypot(*d.T)))] < 0] *= -1
+    u = d.sum(0) / np.hypot(*d.sum(0))
+    n = np.array([-u[1], u[0]])
+    s = seg.mean(1) @ n
+    best = None
+    for p in np.linspace(0.96 * pitch, 1.04 * pitch, 81):
+        k = np.round((s - s.min()) / p)
+        off = s - s.min() - k * p
+        # Every line counts, none for more than a foot: one stray stroke must not set the pitch,
+        # and nor may a pitch be chosen that suits most lines and leaves the rest between places.
+        miss = float(np.minimum(np.abs(off - np.median(off)), 0.3).mean())
+        if best is None or miss < best[0] - 1e-6:
+            best = (miss, p, k)
+    _, pitch, k = best
+    if len(set(k)) > 1:
+        pitch, start = (float(v) for v in np.polyfit(k, s, 1))
+    else:
+        start = float(s.mean())
+    lo, hi = np.minimum(seg[:, 0] @ u, seg[:, 1] @ u), np.maximum(seg[:, 0] @ u, seg[:, 1] @ u)
+    full = (hi - lo) >= 0.8 * (hi - lo).max()
+    return {"u": u, "n": n, "pitch": pitch, "start": start, "k": k.astype(int), "off": np.abs(s - (start + k * pitch)),
+            "lo": float(np.median(lo[full])), "hi": float(np.median(hi[full]))}
+
+
 def regularise(strokes, on_pavement, shows, log=print):
-    """Refit every row of stalls. Returns (strokes, rows found, lines drawn, lines traced in them)."""
-    out, gone = [], set()
-    found = drawn = traced = 0
+    """Refit every row of stalls. Returns (strokes, rows found, lines drawn, lines traced in them).
+
+    A row is first found where three traced lines stand side by side. It then takes in every
+    other traced line that lies on its lattice, however long the gap: one row of stalls along
+    one kerb is one row, and the trace finds it in pieces with whole stretches missing where
+    the paint has faded or a bush threw its shadow. Between the first traced line and the
+    last, every line of the row is drawn: a row of stalls has no line missing from its
+    middle. Beyond them the row is followed for as long as the photo keeps showing lines.
+    """
+    cand = {n: (centre, u) for n, centre, u, _ in _candidates(strokes)}
+    found_rows = []
     for group in rows(strokes):
-        seg = np.array([strokes[n]["points"] for n in group], float)
-        row = _fit_row(seg)
+        row = _fit_row(np.array([strokes[n]["points"] for n in group], float))
         if row is None:
             continue
         members = [n for n, ok in zip(group, row["ok"]) if ok]
-        have = sorted({int(k) for k, ok in zip(row["k"], row["ok"]) if ok})
+        if len(members) >= 3:
+            found_rows.append((row["pitch"], members))
+    found_rows.sort(key=lambda r: -len(r[1]))
+
+    out, gone = [], set()
+    found = drawn = traced = 0
+    for pitch, members in found_rows:
+        if any(n in gone for n in members):
+            continue                          # already part of a longer row
+        members = list(members)
+        for _ in range(3):                    # each line taken in sharpens the lattice for the next
+            row = _refit(np.array([strokes[n]["points"] for n in members], float), pitch)
+            first, last = row["k"].min(), row["k"].max()
+            more = []
+            for n, (centre, u) in cand.items():
+                if n in gone or n in members or abs(u @ row["u"]) < np.cos(np.radians(PARALLEL)):
+                    continue
+                if not (row["lo"] - 1.0 <= centre @ row["u"] <= row["hi"] + 1.0):
+                    continue
+                at = (centre @ row["n"] - row["start"]) / row["pitch"]
+                # The pitch is known to a few per cent, so the further along, the more leeway.
+                beyond = max(first - round(at), round(at) - last, 0)
+                leeway = min(ON_LATTICE + PITCH_ERROR * row["pitch"] * beyond, 0.45 * row["pitch"])
+                if abs(at - round(at)) * row["pitch"] <= leeway and beyond <= FAR:
+                    more.append(n)
+            if not more:
+                break
+            members += more
+        keep_members = [n for n, off in zip(members, row["off"]) if off <= 0.4]
+        have = sorted({int(k) for k, off in zip(row["k"], row["off"]) if off <= 0.4})
         if len(have) < 3:
             continue
 
@@ -165,28 +238,36 @@ def regularise(strokes, on_pavement, shows, log=print):
         def line(k):
             return at(k, row["lo"], row["hi"])
 
-        def good(k, strict):
+        def paved(k):
+            # A stall line ends at the kerb, and the kerb is where the pavement map is least
+            # sure of itself: the line is asked for a little way in from each end.
             a, b = line(k)
-            if not (on_pavement(*a) and on_pavement(*b) and on_pavement(*((a + b) / 2))):
-                return False
-            share, visible = shows(a, b)
-            # A stall line hidden under a parked car is taken on trust inside a row. Past the
-            # row's end nothing is.
-            return share >= SHOWS if visible >= 1.0 else not strict
+            return all(on_pavement(*(a + t * (b - a))) for t in (0.15, 0.5, 0.85))
 
-        keep = set(have) | {k for k in range(have[0], have[-1] + 1) if k not in have and good(k, False)}
+        def clear(k):
+            # Past the last traced line a kerb passes for paint: bright, straight, and
+            # parallel to the stalls. A line added there must have pavement on both sides.
+            a, b = line(k)
+            return all(on_pavement(*(a + t * (b - a) + side * row["n"])) for t in (0.15, 0.5, 0.85) for side in (-EDGE, 0.0, EDGE))
+
+        keep = {k for k in range(have[0], have[-1] + 1) if paved(k)}
         for way in (1, -1):
-            k, missed = (have[-1] if way > 0 else have[0]) + way, 0
+            k, missed, unsure = (have[-1] if way > 0 else have[0]) + way, 0, []
             for _ in range(BEYOND):
-                if good(k, True):
-                    keep.add(k)
-                    missed = 0
+                if not clear(k):
+                    break                                   # the pavement has ended, and the row with it
+                share, visible = shows(*line(k))
+                if visible < 1.0:
+                    unsure.append(k)                        # under a parked car: no telling yet
+                elif share >= SHOWS:
+                    keep.update(unsure + [k])
+                    missed, unsure = 0, []
                 else:
                     missed += 1
                     if missed == 2:
                         break
                 k += way
-        width = float(np.median([strokes[n]["width"] for n in members]))
+        width = float(np.median([strokes[n]["width"] for n in keep_members]))
         for k in sorted(keep):
             a, b = line(k)
             out.append({"colour": "white", "width": width, "points": [[round(float(a[0]), 3), round(float(a[1]), 3)], [round(float(b[0]), 3), round(float(b[1]), 3)]]})

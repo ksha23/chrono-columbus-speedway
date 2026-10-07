@@ -37,9 +37,9 @@ import urllib.request
 
 # The published scene: one pinned archive, checked against its hash before anything is unpacked,
 # so a changed or truncated download fails here and not later as a half-loaded scene.
-RELEASE = "https://github.com/ksha23/chrono-columbus-speedway/releases/download/v3/"
+RELEASE = "https://github.com/ksha23/chrono-columbus-speedway/releases/download/v4/"
 SCENE_URL = RELEASE + "speedway_scene_base.tar.gz"
-SCENE_SHA256 = "93d49e458281231c507bb02d8d5a28305e3bbfd8bf6e922d4f214cd5cf0db700"
+SCENE_SHA256 = "aec0c430eff2424e7f6b2a8e30405a45b1f933ef70ef505b01f40a6ca407c5fa"
 SCENE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scene")
 
 MANIFEST = "speedway_scene.json"
@@ -70,7 +70,7 @@ OPTIONAL = [
 ]
 
 # The scene format this script expects. fetch() replaces an older scene it installed itself.
-SCENE_VERSION = 3
+SCENE_VERSION = 4
 
 # Where the car starts if the scene does not say: x, y in metres and yaw in radians. The site
 # keeps its real elevation, so the ground is near z = 295 m and not z = 0.
