@@ -64,9 +64,12 @@ def for_renderer(photo):
     return out
 
 
-def shown(texture):
-    """What the renderer puts on screen for a texture made by for_renderer, sunlit: sRGB uint8."""
-    return (encode(texture.astype(np.float32) / 255.0 * LIT) * 255.0 + 0.5).astype(np.uint8)
+def shown(texture, gain=1.0):
+    """What the renderer puts on screen for a texture made by for_renderer, sunlit: sRGB uint8.
+
+    gain is in linear light: 1 / EXPOSURE gives the picture at the photo's own brightness.
+    """
+    return (encode(texture.astype(np.float32) / 255.0 * (LIT * gain)) * 255.0 + 0.5).astype(np.uint8)
 
 
 def colour_for_renderer(rgb):

@@ -26,6 +26,7 @@ import markings_tidy
 import markmodel
 import objects
 import outline
+import paintwear
 import pavement
 import photoprofile
 import poles
@@ -40,6 +41,8 @@ import vehicles
 
 ROUGH = 13.0       # grey levels: how much ground varies over a metre before it stops being even
 STRUCTURE_MARGIN = 0.3   # metres painted out beyond a small structure's own shape
+PAINT_REACH = 0.3        # metres from a drawn line within which what was traced is that line's paint
+WORN_NEAR = 1.0          # metres round a crown or a relit shadow that blotches are mopped up in, in a worn build
 
 
 def open_ground(work, raster, photo):
@@ -85,8 +88,13 @@ def open_ground(work, raster, photo):
             "grass": grass, "sunlit_paved": sunlit_paved, "grey": grey, "valid": valid, "smooth": smooth}
 
 
-def thin_shadows(photo, raster, g, paved, wet, grains, log):
-    """Paint out the shadows of poles and posts. photo is changed in place."""
+def thin_shadows(photo, raster, g, paved, wet, grains, log, paved_only=None):
+    """Paint out the shadows of poles and posts. photo is changed in place.
+
+    paved_only, a map on the pavement's cells, keeps the lines taken off pavement to where it
+    is set. A joint or a sealed crack in concrete is a thin dark straight line too, and
+    nothing here can tell it from a shadow.
+    """
     cell = g["cell"]
     shape = paved.shape
     open_cells = g["known"] & ~wet
@@ -95,6 +103,8 @@ def thin_shadows(photo, raster, g, paved, wet, grains, log):
     kinds = {"paved": paved & pavement.to_fine(open_cells, shape, cell) & ~rim,
              "land": ~paved & pavement.to_fine(open_cells, shape, cell) & ~rim}
     found = thinshadows.find(photo, raster, kinds["paved"], kinds["land"])
+    if paved_only is not None:
+        found["paved"] &= paved_only
     k = int(round(pavement.RES / raster["res"]))
     for name, grain in (("land", grains[0]), ("paved", grains[1])):
         full = np.zeros(photo.shape[:2], bool)
@@ -153,13 +163,18 @@ def _paint_out(photo, raster, left, on_road, grains, taken):
     taken |= left
 
 
-def prepare(work, ref, raster, deshadow=True, without=(), log=print):
+def prepare(work, ref, raster, deshadow=True, without=(), log=print, worn=False):
     """Return (ground photo over the whole raster, aerial picture colour-matched to it, things, masks, edge).
 
     things is what was found standing on the ground and painted out, to be put back as objects:
     {"cones": [...], "poles": [...], "vehicles": [...], "blocks": [...], "barriers": [...], "markings": [...], "edge_lines": [...]}. masks is what open_ground found, with "paved" replaced by the finished pavement map, for
     the callers that plant things on that ground. edge is the pavement.Edge the mesh is cut on.
     without names kinds of thing to leave in the photo and not look for.
+
+    worn asks for the track as found, not tidied. Cracks, joints and stains stay in the photo:
+    only what is paint is painted out with the paint, and blotches are mopped up only where a
+    shadow or a crown left them. And each stroke of paint is given its wear (paintwear.py),
+    with things["pavement"] the pavement's usual colour for the worn paint to fade toward.
     """
     raw = np.load(os.path.join(work, "photo.npy"), mmap_mode="r")
     covered = np.isfinite(np.load(os.path.join(work, "surface.npy"), mmap_mode="r"))
@@ -236,7 +251,11 @@ def prepare(work, ref, raster, deshadow=True, without=(), log=print):
         plain = ndimage.binary_erosion(g["paved"], iterations=int(round(0.75 / cell)))
         photo = fill.even_out(photo, raster, matte, g["known"], g["paved"] | g["grey"], wet, cell, paved, grains, before=raw, plain_cells=plain)
         log(f"  shadows relit and levelled over {(np.asarray(matte[::4, ::4]) > 64).mean() * photo.shape[0] * photo.shape[1] * raster['res'] ** 2:.0f} m2")
-        thin_shadows(photo, raster, g, paved, wet, grains, log)
+        # As found, the pavement keeps its thin dark lines: they are its joints and cracks.
+        # Every thing that casts a thin shadow and has a model is painted out with its shadow
+        # further on. The one shadow that is only taken here is the lattice tower's.
+        thin_shadows(photo, raster, g, paved, wet, grains, log,
+                     landmarks.tower_shadows(things["landmarks"], raster, pavement.RES, paved.shape) if worn else None)
         # Light poles: found in the photo as flown, by their shadows, then painted out whole.
         if "poles" not in without:
             things["poles"] = poles.locate(raw, raster, paved, obj["height"], obj["trees"], obj["buildings"], cell, work)
@@ -370,6 +389,15 @@ def prepare(work, ref, raster, deshadow=True, without=(), log=print):
         for sign in things["symbols"]:
             things["markings"] += symbols.strokes(sign)
         traced |= blue & on_road
+        if worn:
+            # The tracer takes a slab joint or the rim of a stain for a white line, and tidying
+            # drops it from the paint. The photo keeps it: only what lies by a line that is
+            # drawn goes. And the paint's wear is read here, while the paint is still in the photo.
+            drawn_paint = markmodel.footprint(things["markings"], raster, painted.shape[:2], margin=PAINT_REACH)
+            traced &= drawn_paint | (blue & on_road)
+            paintwear.measure(things["markings"], painted, raster, out_of_sight, log)
+            sample = np.asarray(painted[::40, ::40], dtype=np.float32)[on_road[::40, ::40] & ~taken[::40, ::40]]
+            things["pavement"] = [round(float(c) / 255.0, 4) for c in np.median(sample, axis=0)]
         fill.repaint_tiled(painted, raster, traced, grains[1])
         metres = {colour: sum(railmodel.length_of(m["points"]) for m in things["markings"] if m["colour"] == colour) for colour in ("yellow", "white")}
         log(f"  painted out {len(things['markings'])} strokes of road paint: {metres['yellow']:.0f} m yellow, {metres['white']:.0f} m white")
@@ -397,7 +425,10 @@ def prepare(work, ref, raster, deshadow=True, without=(), log=print):
     # What a crown hid has its fringe beside it: flecks of leaf and sun on the pavement
     # round a bite that has just been filled. A metre and a half round it is repainted too.
     gained = g["paved"] & ~traced
-    fringe = ndimage.binary_dilation(gained, iterations=int(round(1.5 / cell))) & g["paved"]
+    # As found, only round a bite a crown took. A road's edge redrawn a hand's width further
+    # out is gained too, all along the road, and a fringe round that is half the road's
+    # width painted over: its joints and its stains with it.
+    fringe = ndimage.binary_dilation(gained & hidden if worn else gained, iterations=int(round(1.5 / cell))) & g["paved"]
     changed = (modelled ^ traced) | gained | fringe | (modelled & ~g["paved"] & (g["standing"] | g["holes"]))
     changed = ndimage.binary_dilation(changed, iterations=1) & g["inside"]
     if changed.any():
@@ -408,7 +439,12 @@ def prepare(work, ref, raster, deshadow=True, without=(), log=print):
         soft_shade = (np.asarray(matte[::k_fine, ::k_fine]) > 32)[:paved.shape[0], :paved.shape[1]]
         wide = distance >= edgelines.APRON
         on_apron = ndimage.distance_transform_edt(~wide) * pavement.RES <= edgelines.APRON + edgelines.STOP if wide.any() else np.zeros_like(paved)
-        fill.unspot(painted, raster, paved, unseen | soft_shade | pavement.to_fine(changed, paved.shape, cell), grains[1], log, paved & ~on_apron)
+        if worn:
+            # As found, a crack or a joint stays. Only what a tree left is mopped up: on the
+            # pavement its crown hid or its shadow lay on, and a little way round that.
+            fill.unspot(painted, raster, paved, unseen | soft_shade, grains[1], log, near=WORN_NEAR)
+        else:
+            fill.unspot(painted, raster, paved, unseen | soft_shade | pavement.to_fine(changed, paved.shape, cell), grains[1], log, paved & ~on_apron)
 
     # Edge lines: not painted on the real track, drawn along every road as an option.
     if "edgelines" not in without:

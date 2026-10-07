@@ -32,6 +32,7 @@ import ground  # noqa: E402
 import groundphoto  # noqa: E402
 import landmarks  # noqa: E402
 import objects  # noqa: E402
+import paintwear  # noqa: E402
 import polemodel  # noqa: E402
 import poles  # noqa: E402
 import railmodel  # noqa: E402
@@ -56,6 +57,7 @@ MANIFEST = "speedway_scene.json"
 PARKED = ("sedan", "hatchback", "suv")   # the models parked cars are drawn from. Chrono's van is a 1970s microbus
 TALL_VEHICLE = 1.8    # metres: models at least this tall are the SUVs, vans and pickups
 TALL_SEEN = 1.6       # and vehicles the scan measured at least this tall get one of them
+PHOTOGRAPHED = "textures/photo"     # where a worn build keeps the ground's pictures as the drone took them
 
 
 def chrono_data(args):
@@ -77,6 +79,7 @@ def main():
     parser.add_argument("--save-photo", action="store_true", help="also write the finished ground photo and the pavement map to WORK_DIR, for audit_ground.py")
     parser.add_argument("--without", default="", help="comma-separated kinds of thing to leave alone, out of poles, vehicles, blocks, barriers, landmarks, rocks, markings, edgelines")
     parser.add_argument("--keep-shadows", action="store_true", help="publish the photo with its shadows still in")
+    parser.add_argument("--worn", action="store_true", help="the track as found, for testing perception: cracks, joints and stains stay in the photo, and paint is as worn as the photo shows it")
     args = parser.parse_args()
     start = time.perf_counter()
 
@@ -90,13 +93,20 @@ def main():
         print(f"[{time.perf_counter() - start:5.1f} s]{message if message.startswith(' ') else ' ' + message}", flush=True)
 
     filled, matched, things, masks, edge = groundphoto.prepare(args.work, ref, raster, deshadow=not args.keep_shadows, without=set(filter(None, args.without.split(","))),
-                                                               log=timed)
+                                                               log=timed, worn=args.worn)
     print(f"[{time.perf_counter() - start:5.1f} s] ground photo ready")
     if args.save_photo:
         np.save(os.path.join(args.work, "ground_photo.npy"), filled)
 
     os.makedirs(os.path.join(args.scene, "textures"), exist_ok=True)
     tiles.save_texture(matched, os.path.join(args.scene, "textures", "surround.jpg"))
+    if args.worn:
+        # The ground's pictures once more, as the drone took them. Chrono::VSG cannot show
+        # ground brighter than a ceiling, so its pictures are darkened and their highlights
+        # squeezed, and on sunlit concrete that takes from half to nine tenths of the contrast
+        # a joint or a stain has. A renderer without that ceiling is given these (sensor_scene.py).
+        tiles.write_tiles(filled, raster, "standard", os.path.join(args.scene, PHOTOGRAPHED), edge, as_photographed=True)
+        tiles.save_texture(matched, os.path.join(args.scene, PHOTOGRAPHED, "surround.jpg"), as_photographed=True)
     for level in args.levels.split(","):
         size, with_road = tiles.write_tiles(filled, raster, level, os.path.join(args.scene, "textures", level), edge)
         print(f"[{time.perf_counter() - start:5.1f} s] {level}: {len(raster['tiles'])} tiles of {layout.tile_pixels(layout.LEVELS[level])} px,"
@@ -310,11 +320,15 @@ def main():
     if things["markings"]:
         os.makedirs(os.path.join(args.scene, "markings"), exist_ok=True)
         drawn = 0
-        for colour, (v, f) in markmodel.make(things["markings"], ref, road).items():
-            drawn += markmodel.write_obj(os.path.join(args.scene, "markings", f"paint_{colour}.obj"), v, f)
-            assets.append({"name": f"paint_{colour}", "parts": [{"name": "paint", "mesh": f"markings/paint_{colour}.obj", "roughness_value": 0.9,
-                                                                 "colour": [round(c, 3) for c in renderer.colour_for_renderer(markmodel.COLOURS[colour])]}]})
-            instances.append({"asset": len(assets) - 1, "group": "Markings", "name": f"paint_{colour}", "pos": [0.0, 0.0, 0.0], "rot": [1.0, 0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]})
+        for name, (v, f) in markmodel.make(things["markings"], ref, road).items():
+            # A name is a colour, or in a worn build a colour and how much of it is left.
+            colour, _, level = name.partition("@")
+            seen = paintwear.colour(colour, int(level), things["pavement"]) if level else markmodel.COLOURS[colour]
+            name = name.replace("@", "_")
+            drawn += markmodel.write_obj(os.path.join(args.scene, "markings", f"paint_{name}.obj"), v, f)
+            assets.append({"name": f"paint_{name}", "parts": [{"name": "paint", "mesh": f"markings/paint_{name}.obj", "roughness_value": 0.9,
+                                                               "colour": [round(c, 3) for c in renderer.colour_for_renderer(seen)]}]})
+            instances.append({"asset": len(assets) - 1, "group": "Markings", "name": f"paint_{name}", "pos": [0.0, 0.0, 0.0], "rot": [1.0, 0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]})
         # The strokes themselves travel with the scene: they are the lane geometry, as data.
         with open(os.path.join(args.scene, "markings", "strokes.json"), "w") as f:
             json.dump(things["markings"], f)
@@ -365,6 +379,9 @@ def main():
         "assets": assets,
         "instances": instances,
     }
+    if args.worn:
+        manifest["worn"] = "the track as found: cracks, joints and stains kept in the photo, paint as worn as the photo shows it"
+        manifest["as_photographed"] = PHOTOGRAPHED
     with open(os.path.join(args.scene, MANIFEST), "w") as f:
         json.dump(manifest, f, indent=1)
     print(f"[{time.perf_counter() - start:5.1f} s] wrote {MANIFEST}: {len(assets)} assets, {len(instances)} placements")

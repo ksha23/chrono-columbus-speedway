@@ -398,7 +398,7 @@ SPOT_THIN = 1.2      # unless it is no wider than this many metres anywhere: lin
 SPOT_NEAR = 4.0      # metres from a relit shadow or a crown within which blotches are painted out
 
 
-def unspot(photo, raster, paved_fine, shade_fine, grain, log=print, roads_fine=None):
+def unspot(photo, raster, paved_fine, shade_fine, grain, log=print, roads_fine=None, near=None):
     """Paint out the blotches left on pavement. In place.
 
     Relighting and levelling take a tree's shadow off a road, but not every fleck of sun
@@ -407,7 +407,8 @@ def unspot(photo, raster, paved_fine, shade_fine, grain, log=print, roads_fine=N
     where a shadow was relit or a crown stood (shade_fine, on the pavement map's cells), and
     anywhere on a road (roads_fine), whatever stands SPOT grey levels off the pavement around
     it and is small or thin is painted over with plain pavement. A crack or a joint goes
-    with it. A patch of other pavement is neither small nor thin, and stays.
+    with it. A patch of other pavement is neither small nor thin, and stays. near, if given,
+    is used in place of SPOT_NEAR.
     """
     h, w = paved_fine.shape
     k = photo.shape[0] // h
@@ -421,7 +422,7 @@ def unspot(photo, raster, paved_fine, shade_fine, grain, log=print, roads_fine=N
 
     parallel.each(band, range(0, h, 512))
     inside = ndimage.binary_erosion(paved_fine, iterations=3)
-    zone = inside & (ndimage.distance_transform_edt(~shade_fine) * cell <= SPOT_NEAR)
+    zone = inside & (ndimage.distance_transform_edt(~shade_fine) * cell <= (SPOT_NEAR if near is None else near))
     if roads_fine is not None:
         zone |= inside & roads_fine
     if not zone.any():

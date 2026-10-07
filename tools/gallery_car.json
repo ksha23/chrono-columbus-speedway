@@ -1,0 +1,13 @@
+{
+  "about": "Views from a car: the eye 1.3 m above the road, looking along it. For look_sensor.py --views, with --camera. Same form as gallery.json.",
+  "views": {
+    "car_sbend": {"pose": [-96, -40, 1.3, -72, -45, 1.0]},
+    "car_straight": {"pose": [-30, -60, 1.3, 0, -33, 1.0]},
+    "car_pad": {"pose": [118, 92, 1.3, 150, 120, 0.3]},
+    "car_carpark": {"pose": [-232, -168, 1.3, -221, -145, 1.2]},
+    "car_north": {"pose": [188, 188.5, 1.3, 160, 189.5, 1.0]},
+    "car_east": {"pose": [262.5, 36, 1.3, 265, 70, 0.8]},
+    "car_pond": {"pose": [188, 2.5, 1.3, 220, 9, 0.8]},
+    "car_shed": {"pose": [-110, -22, 1.3, -124, -33, 1.2]}
+  }
+}

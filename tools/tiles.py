@@ -22,13 +22,15 @@ JPEG_QUALITY = 90
 SOLID = 0.10    # metres inside its own side of the edge before a pixel is trusted as pure
 
 
-def save_texture(picture, path):
+def save_texture(picture, path, as_photographed=False):
     """Save an sRGB picture as a JPEG texture, converted to what the renderer expects.
 
     The conversion comes after any resizing, so averaging is done on the photo's own values.
+    as_photographed leaves the conversion out: the picture as the drone took it, for a
+    renderer that takes a texture as an ordinary picture and has no ceiling to stay under.
     """
     # Full-resolution colour: a paint line is two pixels wide, and halved colour would fade it.
-    Image.fromarray(renderer.for_renderer(picture)).save(path, quality=JPEG_QUALITY, subsampling=0, optimize=True)
+    Image.fromarray(picture if as_photographed else renderer.for_renderer(picture)).save(path, quality=JPEG_QUALITY, subsampling=0, optimize=True)
 
 
 def spread(window, source):
@@ -37,10 +39,11 @@ def spread(window, source):
     return window[rows, cols]
 
 
-def write_tiles(photo, raster, level, directory, edge):
+def write_tiles(photo, raster, level, directory, edge, as_photographed=False):
     """Write the JPEGs of one detail level. photo is the full raster at raster["res"].
 
     edge is the pavement.Edge. Returns (total bytes, names of the tiles that got a road picture).
+    as_photographed is save_texture's.
     """
     os.makedirs(directory, exist_ok=True)
     res = layout.LEVELS[level]
@@ -74,6 +77,6 @@ def write_tiles(photo, raster, level, directory, edge):
             if factor > 1:
                 img = img.resize((size, size), Image.BOX)
             path = os.path.join(directory, ground.tile_name(i, j) + suffix + ".jpg")
-            save_texture(np.asarray(img), path)
+            save_texture(np.asarray(img), path, as_photographed)
             total += os.path.getsize(path)
     return total, with_road

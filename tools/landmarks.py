@@ -82,6 +82,17 @@ def footprint(marks, raster, cell, shape, suns):
     return out
 
 
+def tower_shadows(marks, raster, cell, shape):
+    """Where the towers' shadows lie, from foot to tip and a little to either side: a boolean map on cells of the given size."""
+    out = np.zeros(shape, bool)
+    for tower in marks.get("towers", []):
+        centre, tip = np.array([tower["x"], tower["y"]]), np.asarray(tower["shadow_tip"], float)
+        toward = (tip - centre) / np.hypot(*(tip - centre))
+        left = np.array([-toward[1], toward[0]]) * tower["base"] / 2
+        out |= _hull([centre + left, centre - left, tip + left, tip - left], raster, cell, shape, ROUND_TOWER)
+    return out
+
+
 def build(marks, suns, ground, scene_dir, colour):
     """Write the landmarks' meshes under scene_dir. Returns (assets, instances) for the manifest.
 

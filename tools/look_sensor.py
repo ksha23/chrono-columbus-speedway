@@ -13,6 +13,9 @@ and a ray tracing backend, and the conda package for macOS has neither. The pict
 README were drawn on an M4 Pro with the Metal backend, through Python bindings for its camera
 that are not in Chrono yet.
 
+With --camera the picture is what a camera of that kind would have written, not the light
+itself: see cameramodel.py. --no-edge-lines leaves out the edge lines the real track lacks.
+
 The light is one sun and an even ambient light, set so that flat ground in the sun comes out
 about as bright as Chrono::VSG shows it. The sky is one of the pictures Chrono ships, turned so that its
 sun stands where the light comes from (sky.py). The sun's height is the picture's own.
@@ -33,14 +36,18 @@ for candidate in (os.path.join(here, ".."), os.path.join(here, "..", "repo")):
     if os.path.isfile(os.path.join(candidate, "speedway.py")):
         sys.path.insert(0, candidate)
 sys.path.insert(0, here)
+import cameramodel  # noqa: E402
 import sky  # noqa: E402
 import speedway  # noqa: E402
 
 SUN = 1.10          # the sun's strength and the ambient light's, set by comparing pictures: sunlit
 AMBIENT = 0.30      # ground then shows within 6% of what Chrono::VSG shows, and shadow at about a third of it
+SUN_TINT = (1.04, 1.00, 0.92)   # sunlight is a little warm and the sky's light is blue, so a shadow is
+SKY_TINT = (0.90, 1.00, 1.18)   # bluer than the ground beside it. Together, in the sun, they come out neutral
 VERTICAL_FOV = 40.0  # degrees, what Chrono::VSG's camera has unless told otherwise
 RATE = 20.0         # pictures a second the camera is asked for. Only the last one of a view is kept
 GAMMA = 2.2         # the camera's own: what it shows is the light it gathered to the power of 1 / 2.2
+HEADROOM = 0.6      # the share of the light a picture is drawn in when a camera model is to expose it
 
 
 def write_png(path, rgb):
@@ -69,6 +76,10 @@ def main():
     parser.add_argument("--sun", type=float, default=180.0, help="compass bearing the sun stands at, in degrees")
     parser.add_argument("--sky", default="sunflowers_4k", help="one of Chrono's sky pictures by name, or the path of a .hdr file")
     parser.add_argument("--light", type=float, nargs=2, default=(SUN, AMBIENT), metavar=("SUN", "AMBIENT"), help="strength of the sun and of the ambient light")
+    parser.add_argument("--camera", choices=sorted(cameramodel.CAMERAS), default=None,
+                        help="draw as this camera would: its size and field of view, and its lens, exposure, noise and sharpening (cameramodel.py)")
+    parser.add_argument("--seed", type=int, default=0, help="for the camera's noise")
+    parser.add_argument("--no-edge-lines", action="store_true", help="leave out the white edge lines, which the real track does not have")
     args = parser.parse_args()
 
     import pychrono as chrono
@@ -88,8 +99,12 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     start = time.perf_counter()
 
+    camera_model = cameramodel.CAMERAS[args.camera] if args.camera else None
+    if camera_model:
+        args.size = camera_model["size"]
     system = chrono.ChSystemNSC()
-    speedway.add_scenery(system, args.scene, "standard", verbose=False)
+    groups = [group for group in speedway.manifest(args.scene)["labels"] if group != "EdgeLines"] if args.no_edge_lines else None
+    speedway.add_scenery(system, args.scene, "standard", groups=groups, verbose=False)
     holder = chrono.ChBody()
     holder.SetFixed(True)
     system.Add(holder)
@@ -120,8 +135,12 @@ def main():
 
     manager = sens.ChSensorManager(system)
     sun, ambient = args.light
-    manager.scene.AddDirectionalLight(chrono.ChColor(sun, sun, sun), math.radians(elevation), math.radians(toward))
-    manager.scene.SetAmbientLight(chrono.ChVector3f(ambient, ambient, ambient))
+    if camera_model:
+        # A camera sets its own exposure. What it is given must not have run out of range
+        # before that, and sunlit concrete at full light does.
+        sun, ambient = sun * HEADROOM, ambient * HEADROOM
+    manager.scene.AddDirectionalLight(chrono.ChColor(*(sun * c for c in SUN_TINT)), math.radians(elevation), math.radians(toward))
+    manager.scene.SetAmbientLight(chrono.ChVector3f(*(ambient * c for c in SKY_TINT)))
     background = sens.Background()
     background.mode = sens.BackgroundMode_ENVIRONMENT_MAP
     background.env_tex = turned
@@ -131,7 +150,9 @@ def main():
     wide, tall = args.size
     cameras = {}
     for view in views.values():
-        fov = float(view.get("fov", VERTICAL_FOV))
+        # A camera has its own field of view, whatever the view asks for.
+        view["fov"] = cameramodel.vertical_fov(camera_model) if camera_model else float(view.get("fov", VERTICAL_FOV))
+        fov = view["fov"]
         if fov not in cameras:
             across = 2 * math.atan(math.tan(math.radians(fov) / 2) * wide / tall)
             camera = sens.ChCameraSensor(holder, RATE, pose(*view["pose"]), wide, tall, across, args.samples)
@@ -143,8 +164,9 @@ def main():
     print(f"[{time.perf_counter() - start:5.1f} s] scene loaded, sun at bearing {args.sun:.0f} and {elevation:.0f} degrees up", flush=True)
 
     failed = []
+    noise = np.random.default_rng(args.seed)
     for name, view in views.items():
-        camera = cameras[float(view.get("fov", VERTICAL_FOV))]
+        camera = cameras[view["fov"]]
         camera.SetOffsetPose(pose(*view["pose"]))
         moved, image = system.GetChTime(), None
         for _ in range(600):
@@ -160,6 +182,8 @@ def main():
             failed.append(name)
             print(f"[{time.perf_counter() - start:5.1f} s] {name}: no picture came", flush=True)
             continue
+        if camera_model:
+            image = cameramodel.develop(image, camera_model, noise)
         write_png(os.path.join(args.out, name + ".png"), image)
         print(f"[{time.perf_counter() - start:5.1f} s] {name}", flush=True)
     os.remove(turned)

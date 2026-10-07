@@ -39,7 +39,9 @@ same places through Chrono::Sensor's ray-traced camera, drawn by `tools/look_sen
 script does not do that. It needs a PyChrono built from source with the Sensor module, which
 the conda package for macOS does not have. These were drawn on an M4 Pro with the Metal
 backend, through Python bindings for its camera that are not in Chrono yet. See
-[Through Chrono::Sensor](#through-chronosensor) for what had to change.
+[Through Chrono::Sensor](#through-chronosensor) for what had to change, and
+[For testing perception](#for-testing-perception) for the track as a camera at car height
+would see it.
 
 ## Run it
 
@@ -121,6 +123,75 @@ z = speedway.ground_height(scene, x, y)       # ground height there
 The scene is plain files, so C++ Chrono or any other tool can read it too. `speedway_ground.obj`
 works directly with `RigidTerrain::AddPatch`, and so do `speedway_road.obj` and
 `speedway_terrain.obj` as a pair.
+
+## For testing perception
+
+The scene the script downloads is made to drive on and to look tidy. Roads are wiped of
+cracks and stains, paint is as bright as the day it was laid, every road has white edge
+lines that the real track does not have, trees are flat triangles, and the camera that draws
+it is perfect. Software that reads a camera's pictures should be tested on the track as it
+is, seen as a camera sees. `tools/` has that in three steps for Chrono::Sensor. Each stands
+alone, and none changes the scene the script downloads.
+
+| Step | What it gives | Where that comes from |
+| --- | --- | --- |
+| `build_scene.py --worn` | The track as found. Cracks, joints, stains and tyre marks stay in the ground's picture. Each half metre of paint is as faded as the photo shows it, in five levels. And the ground's pictures are kept a second time, exactly as the drone took them | Measured: all of it is read from the drone photo |
+| `sensor_scene.py --detail` | What a scan from the air cannot give and a camera at car height sees: leaves and bark on the trees, grain in the ground finer than the photo's 5 cm, grass that stands up along the pavement's edge | Synthesized: drawn to be of the right kind, not measured on the site |
+| `look_sensor.py --camera zedx_2mm --no-edge-lines` | The picture as a camera would write it: its field of view, a lens that darkens toward the corners and blurs a little, an exposure it sets itself, photon and read noise, a tone curve, sharpening. And no edge lines | The camera's size and field of view are the maker's. Every other number is typical of its kind and not measured on a real unit |
+
+| The published scene through a perfect camera | As found, with detail, through the camera model |
+| --- | --- |
+| ![A clean road with bright yellow lines and white edge lines](docs/gallery/camera/sbend_ideal.jpg) | ![The same road with its cracks, faded paint and no edge lines](docs/gallery/camera/sbend_camera.jpg) |
+| ![A straight with smooth blank pavement](docs/gallery/camera/straight_ideal.jpg) | ![The same straight with the concrete's own texture](docs/gallery/camera/straight_camera.jpg) |
+| ![The skid pad with cones](docs/gallery/camera/pad_ideal.jpg) | ![The same view through the camera model](docs/gallery/camera/pad_camera.jpg) |
+| ![A road under trees with a fence](docs/gallery/camera/north_ideal.jpg) | ![The same road with leafy trees and worn paint](docs/gallery/camera/north_camera.jpg) |
+
+All eight are from 1.3 m above the road with a 110 degree lens, 960 by 600 pixels, which is
+a Stereolabs ZED X One with its 2.2 mm lens in its binned mode. The views are in
+`tools/gallery_car.json`.
+
+**Why the roads were blank.** Most of it was not the tidying. Chrono::VSG cannot show ground
+brighter than a ceiling (see [The renderer](#the-renderer)), so the ground's pictures are
+stored darker with their highlights squeezed. On sunlit concrete that keeps between an eighth
+and a half of the contrast a joint or a stain has: 54% where the photo is at sRGB 200, 24% at
+220, 13% at 235. The dark skid pad kept its cracks and the bright roads lost theirs.
+Chrono::Sensor has no ceiling, so the copy of a worn scene uses the pictures as the drone
+took them, at the photo's own exposure. The tidying took the rest: one step took every thin
+dark line pointing the way a shadow could for a pole's shadow, joints included, on 859
+stretches. As found it keeps to the tower's shadow, on 10. And the mopping up of blotches
+goes from 6,055 marks to 1,090, kept to where a tree stood or cast its shadow.
+
+**Paint.** Of the paint's half metres, 28% keep 0.45 of their colour, 15% keep 0.6, 22% keep
+0.75, 21% keep 0.9 and 15% are fresh. The stall lines of the car park, which are nearly gone
+in the photo, are at the lowest level. The rest of a worn stretch's colour is the pavement's.
+
+**What this still is not.**
+
+- **Compared with a real camera.** Nothing here has been set beside a frame from a camera at
+  the track. That is the only way to know how large the gap is and which of these steps
+  matter, and it has not been done.
+- **This camera.** Fall-off, blur, well depth, read noise and sharpening are what a sensor
+  and lens of this kind usually have. With one real frame of a known scene they can be
+  fitted. Lens distortion is left out on purpose: a stereo camera's own software removes it
+  before any other software sees the picture.
+- **Detail of this place.** No leaf, blade of grass or grain of stone in the detailed copy is
+  one that is there. Leaves are sprays drawn on the same triangles, in each tree's own
+  measured colour. Grain is noise that keeps every 5 cm pixel of the photo at its own mean.
+  Grass is 92,662 tufts along and behind the pavement's edge.
+- **Walls, cars and cones.** They are what they were: drawn walls and Chrono's models.
+- **Shadows of things without a model.** As found, the shadow of a sign post, or of a light
+  pole the pole finder missed, stays in the ground's picture as a dark line with nothing
+  standing at its end. Nothing in the photo tells such a line from a joint in the concrete.
+- **Trees at one sample a pixel.** A real camera takes one sample, and the ray tracer has no
+  smaller copies of a picture for the distance. Leaves with their own colours then flicker
+  more between two pictures a third of a pixel apart than flat ones did, 1.8 times as much
+  on a crown 24 m away. A video has not been looked at.
+- **The cost.** The detailed copy is 0.9 GB and takes four minutes to make. The ray tracer
+  takes 40 seconds to its first picture where the plain copy takes 15, and 9.7 GB of memory.
+  After that a picture is drawn as fast as before. It uses all 64 pictures the Metal ray
+  tracer takes.
+- **Anyone else.** A worn scene is built from the scan, which is not in this repository, and
+  none is published.
 
 ## What is in the scene
 
@@ -462,7 +533,7 @@ both sides, and `add_scenery` sets `SetDoubleFaced(True)` on them.
 
 ### Through Chrono::Sensor
 
-The scene is stored for Chrono::VSG, and Chrono::Sensor's camera reads three things in it
+The scene is stored for Chrono::VSG, and Chrono::Sensor's camera reads four things in it
 differently. `tools/sensor_scene.py` makes a copy that suits it, and `tools/look_sensor.py`
 draws the copy. Nothing in the scene the script downloads is changed.
 
@@ -470,8 +541,16 @@ draws the copy. Nothing in the scene the script downloads is changed.
   Chrono::VSG takes its values as linear light. Shown the scene as stored, it decodes every
   texture a second time and the picture comes out far too dark. In the copy each texture is
   the picture Chrono::VSG would put on screen for it, and plain colours are scaled to match.
-  The light is one sun and an even ambient light, set by comparing pictures: sunlit ground
-  comes out within 6% of what Chrono::VSG shows, in the five views it was measured in.
+  The light is one sun, a little warm, and an even ambient light, a little blue, set by
+  comparing pictures: sunlit ground comes out within 6% of what Chrono::VSG shows, in the
+  five views it was measured in.
+- *Sizes and colours.* The scene places one cone model at four heights and three colours, and
+  one tree model at a hundred sizes. Chrono::Sensor's Metal ray tracer takes neither from the
+  placement: it draws a triangle mesh at the size in its file and gives every placement of a
+  mesh the colour of the first. Every cone then stands a metre tall and orange. In the copy
+  each size and colour is a mesh file of its own (`tools/placements.py`). The first pictures
+  published here were drawn without this, and in them the cones, the trees and the cars were
+  the wrong size and the cones all one colour.
 - *Leaves.* A leaf is one triangle. The ray tracer lights it by the normals its corners
   carry, from whichever side it is seen, so leaves at every angle make a crown of bright and
   black specks. In the copy a leaf's corners carry the direction out of the middle of its
@@ -486,7 +565,10 @@ draws the copy. Nothing in the scene the script downloads is changed.
 What the ray tracer gives that Chrono::VSG does not: thin lines that stay whole in the
 distance, since each pixel is the mean of nine rays, shadows with clean edges at any range,
 and a sky. What it does not change: the trees are the same triangles and the walls the same
-drawings. Sixteen pictures take 26 seconds on an M4 Pro, 10 of them before the first.
+drawings. Sixteen pictures take 32 seconds on an M4 Pro, 15 of them before the first.
+
+That ray tracer also takes 64 texture pictures in a scene and draws what is beyond them in
+plain colour without a word. This scene uses 61. `sensor_scene.py` counts them.
 
 ### Rebuilding it
 

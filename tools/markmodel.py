@@ -75,13 +75,17 @@ class Road:
 
 
 def make(strokes, ref, road=None):
-    """{colour: (vertices, faces)} for a list of strokes, laid on the ground mesh.
+    """{name: (vertices, faces)} for a list of strokes, laid on the ground mesh.
 
-    road, a Road, gives the height of the pavement's own triangles where there are any.
+    road, a Road, gives the height of the pavement's own triangles where there are any. A
+    name is a colour. Where a stroke says how worn each of its segments is ("wear", from
+    paintwear.py), the name is the colour and the level, as "yellow@2", and each level of
+    each colour is a mesh of its own.
     """
     out = {}
     for colour in COLOURS:
         vertices, faces, base = [], [], 0
+        worn = {}                                  # level -> [four corners of one segment's ribbon, ...]
         for stroke in strokes:
             if stroke["colour"] != colour or len(stroke["points"]) < 2:
                 continue
@@ -97,14 +101,22 @@ def make(strokes, ref, road=None):
             if road is not None:
                 z = road.height(edge[:, 0], edge[:, 1], z)
             z = z + LIFT + stroke.get("raise", 0.0)       # paint on paint lies a little above it
-            vertices.append(np.column_stack([edge, z]))
             n = len(path)
+            if len(stroke.get("wear", ())) == n - 1:
+                corners = np.column_stack([edge, z])
+                for i, level in enumerate(stroke["wear"]):
+                    worn.setdefault(level, []).append(corners[[i, i + 1, n + i + 1, n + i]])     # left i, left i+1, right i+1, right i
+                continue
+            vertices.append(np.column_stack([edge, z]))
             for i in range(n - 1):
                 a, b, c, d = base + i, base + i + 1, base + n + i + 1, base + n + i      # left i, left i+1, right i+1, right i
                 faces += [(d, c, b), (d, b, a)]                                           # wound to face up
             base += 2 * n
         if vertices:
             out[colour] = (np.concatenate(vertices), np.array(faces))
+        for level in sorted(worn):
+            quads = np.arange(len(worn[level]))[:, None] * 4
+            out[f"{colour}@{level}"] = (np.concatenate(worn[level]), np.concatenate([quads + [3, 2, 1], quads + [3, 1, 0]]))
     return out
 
 
