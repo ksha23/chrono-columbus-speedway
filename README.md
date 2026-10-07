@@ -148,7 +148,10 @@ alone, and none changes the scene the script downloads.
 
 All eight are from 1.3 m above the road with a 110 degree lens, 960 by 600 pixels, which is
 a Stereolabs ZED X One with its 2.2 mm lens in its binned mode. The views are in
-`tools/gallery_car.json`.
+`tools/gallery_car.json`. `look_sensor.py` writes pictures and opens no window.
+`tools/watch_sensor.py SENSOR_SCENE` opens one, and runs the camera forward along each of
+these views in turn at 5 m/s, to look at the world in motion. It shows the ray tracer's own
+picture, without the camera model, at 30 pictures a second on an M4 Pro.
 
 **Why the roads were blank.** Most of it was not the tidying. Chrono::VSG cannot show ground
 brighter than a ceiling (see [The renderer](#the-renderer)), so the ground's pictures are
