@@ -1,0 +1,21 @@
+{
+  "about": "The views of the README's pictures: an eye and a target, each as x, y and metres above the ground there, as look.py and look_sensor.py take them. fov is the vertical field of view in degrees where it is not the usual 40.",
+  "views": {
+    "overview": {"pose": [330, -200, 110, 60, 60, 0], "fov": 50},
+    "pad": {"pose": [96, 60, 7, 160, 122, 0]},
+    "sbend": {"pose": [-96, -40, 2.2, -72, -45, 0.3]},
+    "carpark": {"pose": [-238, -136, 3.2, -256, -152, 0.0]},
+    "pond": {"pose": [188, 2.5, 2.2, 220, 9, 0.5]},
+    "straight": {"pose": [-30, -60, 2.2, 0, -33, 0.8]},
+    "north": {"pose": [188, 188.5, 2.2, 160, 189.5, 0.5]},
+    "east": {"pose": [262.5, 36, 2.2, 265, 70, 0.5]},
+    "tower": {"pose": [-146, -76, 2.0, -172.8, -96, 14]},
+    "gates": {"pose": [-112, -42, 2.6, -123, -54, 0.6]},
+    "accessible": {"pose": [-204.5, -155.5, 3.0, -210.5, -150.2, 0]},
+    "rocks": {"pose": [-243, -219, 1.6, -253, -226, 0.3]},
+    "main": {"pose": [-210, -174, 1.7, -221, -141, 2.4]},
+    "shed": {"pose": [-166, -60, 1.7, -141, -38, 3.0]},
+    "trailer": {"pose": [74, 128, 1.7, 68.5, 143, 1.5]},
+    "yard": {"pose": [-247, -106, 1.7, -233, -124, 1.8]}
+  }
+}

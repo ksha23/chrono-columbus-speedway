@@ -6,26 +6,40 @@ PyChrono. Nothing is converted and Chrono is not modified.
 
 ![An Audi on the track in the Chrono VSG window](docs/speedway.jpg)
 
-| | |
-| --- | --- |
-| ![The whole site seen from the south-east](docs/gallery/overview.jpg) | ![The skid pad with its cones and painted courses](docs/gallery/pad.jpg) |
-| The site from the south-east | The skid pad, with its cones and painted courses |
-| ![A double yellow line through an S-bend](docs/gallery/sbend.jpg) | ![A car park with stall lines and a parked car](docs/gallery/carpark.jpg) |
-| The S-bend west of the pad | A car park by the main building |
-| ![A curve with a guard rail on the outside](docs/gallery/pond.jpg) | ![A straight with a dashed centre line](docs/gallery/straight.jpg) |
-| The curve by the pond | The south-east straight |
-| ![A junction with light poles and the fence](docs/gallery/north.jpg) | ![A road with a double yellow line and edge lines](docs/gallery/east.jpg) |
-| The north road at a junction | The east road |
-| ![A lattice tower with a small wind turbine](docs/gallery/tower.jpg) | ![Two swing gates standing open beside a road](docs/gallery/gates.jpg) |
-| The lattice tower | The swing gates, open |
-| ![Two accessible stalls with their symbols and a hatched aisle](docs/gallery/accessible.jpg) | ![Boulders and a line of stones beside the entrance](docs/gallery/rocks.jpg) |
-| The accessible stalls | Boulders at the entrance |
-| ![The main building: steel cladding, a stone front, windows and an entrance canopy](docs/gallery/main.jpg) | ![A two-tone steel shed with a roll-up door, guard posts and propane tanks beside it](docs/gallery/shed.jpg) |
-| The main building | The shed |
-| ![A white trailer with a wooden deck, ramps and handrails](docs/gallery/trailer.jpg) | ![Heating and cooling plant behind screen walls, and a transformer](docs/gallery/yard.jpg) |
-| The trailer and its deck | The plant yards behind the main building |
+| | Chrono::VSG, as the script draws it | Chrono::Sensor, ray traced |
+| --- | --- | --- |
+| The site from the south-east | ![The whole site seen from the south-east](docs/gallery/overview.jpg) | ![The same view, ray traced](docs/gallery/sensor/overview.jpg) |
+| The skid pad, with its cones and painted courses | ![The skid pad with its cones and painted courses](docs/gallery/pad.jpg) | ![The same view, ray traced](docs/gallery/sensor/pad.jpg) |
+| The S-bend west of the pad | ![A double yellow line through an S-bend](docs/gallery/sbend.jpg) | ![The same view, ray traced](docs/gallery/sensor/sbend.jpg) |
+| The south-east straight | ![A straight with a dashed centre line](docs/gallery/straight.jpg) | ![The same view, ray traced](docs/gallery/sensor/straight.jpg) |
+| The main building | ![The main building: steel cladding, a stone front, windows and an entrance canopy](docs/gallery/main.jpg) | ![The same view, ray traced](docs/gallery/sensor/main.jpg) |
+| The shed | ![A two-tone steel shed with a roll-up door, guard posts and propane tanks beside it](docs/gallery/shed.jpg) | ![The same view, ray traced](docs/gallery/sensor/shed.jpg) |
+| The trailer and its deck | ![A white trailer with a wooden deck, ramps and handrails](docs/gallery/trailer.jpg) | ![The same view, ray traced](docs/gallery/sensor/trailer.jpg) |
+| The accessible stalls | ![Two accessible stalls with their symbols and a hatched aisle](docs/gallery/accessible.jpg) | ![The same view, ray traced](docs/gallery/sensor/accessible.jpg) |
 
-All of these are stock Chrono::VSG, drawn by `tools/look.py` from the scene the script downloads.
+<details>
+<summary>Eight more views in both renderers</summary>
+
+| | Chrono::VSG, as the script draws it | Chrono::Sensor, ray traced |
+| --- | --- | --- |
+| A car park by the main building | ![A car park with stall lines and a parked car](docs/gallery/carpark.jpg) | ![The same view, ray traced](docs/gallery/sensor/carpark.jpg) |
+| The curve by the pond | ![A curve with a guard rail on the outside](docs/gallery/pond.jpg) | ![The same view, ray traced](docs/gallery/sensor/pond.jpg) |
+| The north road at a junction | ![A junction with light poles and the fence](docs/gallery/north.jpg) | ![The same view, ray traced](docs/gallery/sensor/north.jpg) |
+| The east road | ![A road with a double yellow line and edge lines](docs/gallery/east.jpg) | ![The same view, ray traced](docs/gallery/sensor/east.jpg) |
+| The lattice tower | ![A lattice tower with a small wind turbine](docs/gallery/tower.jpg) | ![The same view, ray traced](docs/gallery/sensor/tower.jpg) |
+| The swing gates, open | ![Two swing gates standing open beside a road](docs/gallery/gates.jpg) | ![The same view, ray traced](docs/gallery/sensor/gates.jpg) |
+| Boulders at the entrance | ![Boulders and a line of stones beside the entrance](docs/gallery/rocks.jpg) | ![The same view, ray traced](docs/gallery/sensor/rocks.jpg) |
+| The plant yards behind the main building | ![Heating and cooling plant behind screen walls, and a transformer](docs/gallery/yard.jpg) | ![The same view, ray traced](docs/gallery/sensor/yard.jpg) |
+
+</details>
+
+The middle column is stock Chrono::VSG, which is what the script shows you, drawn by
+`tools/look.py` from the scene it downloads. The right-hand column is the same scene from the
+same places through Chrono::Sensor's ray-traced camera, drawn by `tools/look_sensor.py`. The
+script does not do that. It needs a PyChrono built from source with the Sensor module, which
+the conda package for macOS does not have. These were drawn on an M4 Pro with the Metal
+backend, through Python bindings for its camera that are not in Chrono yet. See
+[Through Chrono::Sensor](#through-chronosensor) for what had to change.
 
 ## Run it
 
@@ -445,6 +459,34 @@ the numbers.
 
 It also draws one side of a triangle only. Leaves are single triangles meant to be seen from
 both sides, and `add_scenery` sets `SetDoubleFaced(True)` on them.
+
+### Through Chrono::Sensor
+
+The scene is stored for Chrono::VSG, and Chrono::Sensor's camera reads three things in it
+differently. `tools/sensor_scene.py` makes a copy that suits it, and `tools/look_sensor.py`
+draws the copy. Nothing in the scene the script downloads is changed.
+
+- *Textures and colours.* The camera takes a texture as an ordinary sRGB picture, where
+  Chrono::VSG takes its values as linear light. Shown the scene as stored, it decodes every
+  texture a second time and the picture comes out far too dark. In the copy each texture is
+  the picture Chrono::VSG would put on screen for it, and plain colours are scaled to match.
+  The light is one sun and an even ambient light, set by comparing pictures: sunlit ground
+  comes out within 6% of what Chrono::VSG shows, in the five views it was measured in.
+- *Leaves.* A leaf is one triangle. The ray tracer lights it by the normals its corners
+  carry, from whichever side it is seen, so leaves at every angle make a crown of bright and
+  black specks. In the copy a leaf's corners carry the direction out of the middle of its
+  crown, leaning upward, and the crown is lit as the rounded thing it is.
+- *The sky.* The sky is one of the pictures Chrono ships, and the light that casts the
+  shadows knows nothing of it. `tools/sky.py` turns the picture so that its sun stands where
+  the light comes from, due south here, and takes the sun's height from the picture. What lies
+  under the picture's horizon is the ground of wherever it was taken, a field of sunflowers
+  in this one, and from the air it showed round the track as if it were there. It is replaced
+  by the colour of the scene's own ground at its rim.
+
+What the ray tracer gives that Chrono::VSG does not: thin lines that stay whole in the
+distance, since each pixel is the mean of nine rays, shadows with clean edges at any range,
+and a sky. What it does not change: the trees are the same triangles and the walls the same
+drawings. Sixteen pictures take 26 seconds on an M4 Pro, 10 of them before the first.
 
 ### Rebuilding it
 
