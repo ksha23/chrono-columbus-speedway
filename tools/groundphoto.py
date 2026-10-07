@@ -32,12 +32,14 @@ import poles
 import railmodel
 import roads
 import rocks
+import structures
 import symbols
 import thinshadows
 import vehicles
 
 
 ROUGH = 13.0       # grey levels: how much ground varies over a metre before it stops being even
+STRUCTURE_MARGIN = 0.3   # metres painted out beyond a small structure's own shape
 
 
 def open_ground(work, raster, photo):
@@ -249,12 +251,22 @@ def prepare(work, ref, raster, deshadow=True, without=(), log=print):
         left = vehicles.footprint(things["vehicles"], raster, photo.shape[:2], raw, poles.suns(work))
         _paint_out(photo, raster, left, on_road, grains, taken)
         log(f"  painted out {len(things['vehicles'])} parked vehicles with their shadows")
-        # Tanks, huts, bleachers: small man-made things, given back as blocks.
+        # Tanks, a shed, a deck: small man-made things, given back as models of what they are.
         if "blocks" not in without:
             things["blocks"] = blocks.find(obj["height"], small_raw, obj["buildings"], things["vehicles"], cell, raster["x0"], raster["y1"])
         left = vehicles.footprint(things["blocks"], raster, photo.shape[:2], raw, poles.suns(work))
         _paint_out(photo, raster, left, on_road, grains, taken)
         log(f"  painted out {len(things['blocks'])} small structures with their shadows")
+        if "blocks" not in without:
+            # What each of them is built as covers more than its block, and some are not blocks
+            # at all: a deck, plant in a yard. What those left in the photo goes too, save
+            # under a roof, where it is the roof that is in the photo.
+            roofs = np.zeros(photo.shape[:2], bool)
+            big = np.repeat(np.repeat(obj["buildings"], k_cell, axis=0), k_cell, axis=1)
+            roofs[:big.shape[0], :big.shape[1]] = big[:roofs.shape[0], :roofs.shape[1]]
+            left = structures.cover(things["blocks"], raster["x0"], raster["y1"], raster["res"], photo.shape[:2], margin=STRUCTURE_MARGIN) & ~roofs & ~taken
+            _paint_out(photo, raster, left, on_road, grains, taken)
+            log(f"  and {left.sum() * raster['res'] ** 2:.0f} m2 more that the models of them cover")
         # Guard rails and the fence round the property.
         if "barriers" not in without:
             things["barriers"] = barriers.find(work)

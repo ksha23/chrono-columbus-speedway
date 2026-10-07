@@ -1,21 +1,33 @@
-"""Rebuild the scanned buildings as clean models: straight walls and a gable roof.
+"""Rebuild the scanned buildings as clean models: straight walls under a gable roof.
 
 Photogrammetry from overhead gives a building a good roof and melted walls. Each building here
-is refitted as a rectangle in plan with a ridge along its long side, which is what all four on
-this site are. Eave and ridge heights come from the scan's height above the lidar ground. The
-roof keeps its own photograph as a texture. The walls get one flat colour, taken from what
-little of them the drone saw.
+is refitted from its roof: the roof's outline is its plan (footprint.py), the roof's heights
+are its two slopes (roofmodel.py), and the walls stand under its edge (wallmodel.py). The roof
+keeps its own photograph as a texture.
+
+The walls are painted (facade.py). What each is clad in and where its doors and windows are
+was read by hand from what little of the walls the drone saw, and is kept in facades.json. A
+building that file does not name gets plain walls in the colour the scan shows.
 """
+import json
 import os
 
 import numpy as np
 from PIL import Image
 from scipy import ndimage
 
+import facade
+import footprint
+import railmodel
 import renderer
+import roofmodel
+import tubes
+import wallmodel
 
-OVERHANG = 0.3      # metres the roof extends past the walls
-SUNK = 0.4          # metres the walls continue below the lowest ground at the footprint
+FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "facades.json")
+OVERHANG = 0.3      # metres the roof extends past the walls, unless facades.json says otherwise
+NEAR = 6.0          # metres between a building's middle and the point facades.json names it by
+EXTRAS = {"canopy": (62, 70, 82), "posts": (150, 152, 155), "bollards": (228, 190, 40)}
 
 
 def fit_rectangle(xs, ys):
@@ -42,112 +54,140 @@ def fit_rectangle(xs, ys):
 
 
 def measure(mask, height, gx, gy, ref):
-    """One dict per building in the mask: plan rectangle, eave and ridge height, ground level."""
+    """One dict per building in the mask: its frame, its plan, its roof and its ground level.
+
+    The frame is the rectangle fitted round the roof: centre, axis (the unit vector along the
+    ridge), half_length and half_width. plan is the roof's outline in that frame and roof its
+    two slopes. eave and ridge are the roof's lowest and highest edge above the ground.
+    """
     labels, count = ndimage.label(mask)
+    cell = float(gx[0, 1] - gx[0, 0])
+    x0, y1 = float(gx[0, 0]) - cell / 2, float(gy[0, 0]) + cell / 2
     found = []
     for n in range(1, count + 1):
         sel = labels == n
         xs, ys, hs = gx[sel], gy[sel], height[sel]
         centre, u, half_u, half_v = fit_rectangle(xs, ys)
         v = np.array([-u[1], u[0]])
-        across = (np.stack([xs, ys], 1) - centre) @ v
-        # A gable roof is highest along the middle and lowest at the two long edges.
-        ridge = float(np.percentile(hs[np.abs(across) < 0.15 * half_v], 60))
-        eave = float(np.percentile(hs[np.abs(across) > 0.8 * half_v], 40))
+
+        def covered(a, q):
+            x, y = centre[0] + a * u[0] + q * v[0], centre[1] + a * u[1] + q * v[1]
+            rows, cols = ((y1 - y) / cell).astype(int), ((x - x0) / cell).astype(int)
+            inside = (rows >= 0) & (rows < sel.shape[0]) & (cols >= 0) & (cols < sel.shape[1])
+            return inside & sel[np.clip(rows, 0, sel.shape[0] - 1), np.clip(cols, 0, sel.shape[1] - 1)]
+
+        plan = footprint.strips(covered, half_u, half_v)
+        roof = roofmodel.fit((np.stack([xs, ys], 1) - centre) @ v, hs, plan)
+        low, high = min(strip[2] for strip in plan), max(strip[3] for strip in plan)
+        eave = float(min(roofmodel.height(roof, low), roofmodel.height(roof, high)))
         corners = [centre + su * half_u * u + sv * half_v * v for su in (-1, 1) for sv in (-1, 1)]
         ground = [float(ref.elevation(c[0], c[1])) for c in corners]
         found.append({"centre": [float(centre[0]), float(centre[1])], "axis": [float(u[0]), float(u[1])],
                       "half_length": float(half_u), "half_width": float(half_v),
-                      "eave": eave, "ridge": max(ridge, eave + 0.05), "ground": float(np.mean(ground)), "ground_low": float(min(ground))})
+                      "plan": [[round(float(x), 3) for x in strip] for strip in plan], "roof": roof,
+                      "eave": eave, "ridge": max(roof["ridge"], eave + 0.05), "ground": float(np.mean(ground)), "ground_low": float(min(ground))})
     return found
 
 
-def _quad(vertices, normals, uvs, faces, corners, normal, uv=None):
-    base = len(vertices)
-    vertices += [list(map(float, c)) for c in corners]
-    normals += [list(map(float, normal))] * len(corners)
-    uvs += uv if uv is not None else [[0.0, 0.0]] * len(corners)
-    faces += [[base, base + 1, base + 2]] + ([[base, base + 2, base + 3]] if len(corners) == 4 else [])
+def frame(b):
+    """The two ways between a building's frame and the scene: (place, to_frame).
 
-
-def model(b):
-    """Geometry of one building: {"roof": (v, vn, vt, f), "walls": (v, vn, vt, f)}, scene coordinates."""
-    c = np.array(b["centre"])
-    u = np.array(b["axis"])
-    v = np.array([-u[1], u[0]])
-    L, Wd = b["half_length"], b["half_width"]
-    z0, ze, zr = b["ground_low"] - SUNK, b["ground"] + b["eave"], b["ground"] + b["ridge"]
-
-    def p(a, bb, z):
-        return [c[0] + a * u[0] + bb * v[0], c[1] + a * u[1] + bb * v[1], z]
-
-    walls = ([], [], [], [])
-    for (a0, b0), (a1, b1), n in [((-L, -Wd), (L, -Wd), -v), ((L, -Wd), (L, Wd), u), ((L, Wd), (-L, Wd), v), ((-L, Wd), (-L, -Wd), -u)]:
-        _quad(*walls, [p(a0, b0, z0), p(a1, b1, z0), p(a1, b1, ze), p(a0, b0, ze)], [n[0], n[1], 0.0])
-    for s in (-1, 1):   # the two gable ends, triangles above the eave line
-        tri = [p(s * L, -Wd, ze), p(s * L, Wd, ze), p(s * L, 0, zr)]
-        _quad(*walls, tri if s > 0 else tri[::-1], [s * u[0], s * u[1], 0.0])
-
-    roof = ([], [], [], [])
-    Lo, Wo = L + OVERHANG, Wd + OVERHANG
-    drop = (zr - ze) * OVERHANG / Wd     # the roof plane carried on down past the wall
-    rise = np.arctan2(zr - ze, Wd)
-
-    def uv(a, bb):
-        """The roof's photo is its plan view: u along the ridge, v across."""
-        return [(a + Lo) / (2 * Lo), (bb + Wo) / (2 * Wo)]
-
-    for s in (-1, 1):
-        n = [s * v[0] * np.sin(rise), s * v[1] * np.sin(rise), np.cos(rise)]
-        quad = [p(-Lo, s * Wo, ze - drop), p(Lo, s * Wo, ze - drop), p(Lo, 0, zr), p(-Lo, 0, zr)]
-        coords = [uv(-Lo, s * Wo), uv(Lo, s * Wo), uv(Lo, 0), uv(-Lo, 0)]
-        if s > 0:
-            quad, coords = quad[::-1], coords[::-1]
-        _quad(*roof, quad, n, coords)
-    return {"roof": tuple(np.array(x) for x in roof), "walls": tuple(np.array(x) for x in walls)}
-
-
-def roof_photo(b, photo, raster, pixel=0.05):
-    """The roof's plan view cut from the ground photo and turned square to the building."""
+    place(u, w, z) is the scene point at frame coordinates u and w and z metres above the
+    lowest ground at the building. to_frame(x, y) is the frame coordinates of a scene point.
+    """
     c, u = np.array(b["centre"]), np.array(b["axis"])
     v = np.array([-u[1], u[0]])
-    Lo, Wo = b["half_length"] + OVERHANG, b["half_width"] + OVERHANG
-    w, h = int(round(2 * Lo / pixel)), int(round(2 * Wo / pixel))
-    a = (np.arange(w) + 0.5) / w * 2 * Lo - Lo
-    bb = Wo - (np.arange(h) + 0.5) / h * 2 * Wo      # image rows run from v = 1 down to v = 0
-    A, B = np.meshgrid(a, bb)
-    x, y = c[0] + A * u[0] + B * v[0], c[1] + A * u[1] + B * v[1]
-    cols = (x - raster["x0"]) / raster["res"] - 0.5
-    rows = (raster["y1"] - y) / raster["res"] - 0.5
-    r0, c0 = int(rows.min()) - 2, int(cols.min()) - 2
-    window = np.asarray(photo[r0:int(rows.max()) + 3, c0:int(cols.max()) + 3], dtype=np.float32)
-    return np.stack([ndimage.map_coordinates(window[..., ch], [rows - r0, cols - c0], order=1, mode="nearest") for ch in range(3)], -1).astype(np.uint8)
+
+    def place(a, q, z):
+        return np.stack([c[0] + a * u[0] + q * v[0], c[1] + a * u[1] + q * v[1], b["ground_low"] + z + 0.0 * (a + q)])
+
+    def to_frame(x, y):
+        return (x - c[0]) * u[0] + (y - c[1]) * u[1], (x - c[0]) * v[0] + (y - c[1]) * v[1]
+
+    return place, to_frame
 
 
-def write_obj(path, part, with_uv):
-    v, vn, vt, f = part
+def facades(path=FILE):
+    with open(path) as f:
+        return json.load(f)["buildings"]
+
+
+def style_of(b, read, wall_colour):
+    """What facades.json says of a building, or plain walls in the scan's colour if it says nothing."""
+    for entry in read:
+        if np.hypot(entry["near"][0] - b["centre"][0], entry["near"][1] - b["centre"][1]) < NEAR:
+            return entry
+    return {"name": None, "walls": {"cladding": "plain", "colour": [round(255 * float(c)) for c in wall_colour]}, "features": []}
+
+
+def outline(b, style):
+    """A building's walls, as wallmodel.walls gives them: under the roof's edge, set in by its overhang."""
+    ring = footprint.inset(footprint.polygon(b["plan"]), style.get("overhang", OVERHANG))
+    return wallmodel.walls(ring, b["roof"], b["ground"] - b["ground_low"])
+
+
+def model(b, style, photo, raster, seed, log=print):
+    """One building: {"meshes": {part: mesh}, "roof_photo": picture, "wall_photo": picture}."""
+    place, to_frame = frame(b)
+    lift = b["ground"] - b["ground_low"]
+    ring = footprint.polygon(b["plan"])
+    meshes = roofmodel.model(b["plan"], ring, b["roof"], lambda u, w, h: place(u, w, h + lift), style.get("fascia", roofmodel.FASCIA))
+    found = outline(b, style)
+    features = wallmodel.assign(found, style.get("features", []), to_frame, log)
+    walls = dict(style["walls"], trim=style.get("trim", facade.WHITE))
+    pictures = [facade.paint(wall, walls, here, wallmodel.SUNK, seed * 100 + n) for n, (wall, here) in enumerate(zip(found, features))]
+    sheet, places = facade.atlas(pictures)
+    meshes["walls"] = wallmodel.mesh(found, pictures, places, sheet.shape[:2], wallmodel.SUNK, place)
+    extras = {}
+    for wall, here in zip(found, features):
+        for f in here:
+            if f["kind"] == "canopy":
+                for part, piece in wallmodel.canopy(wall, f, wallmodel.SUNK, place).items():
+                    extras.setdefault(part, []).append(piece)
+        posts = [f for f in here if f["kind"] == "bollard"]
+        if posts:
+            extras.setdefault("bollards", []).append(wallmodel.bollards(wall, posts, wallmodel.SUNK, place))
+    return {"meshes": meshes, "extras": {part: tubes.merge(pieces) for part, pieces in extras.items()},
+            "roof_photo": roofmodel.photo(b["plan"], place, photo, raster), "wall_photo": sheet, "walls": len(found),
+            "features": sum(len(here) for here in features)}
+
+
+def write_obj(path, part):
+    """A mesh with a normal for every vertex: (v, vn, vt, f) with a picture, (v, vn, f) without."""
+    v, vn, f = part[0], part[1], part[-1]
+    vt = part[2] if len(part) == 4 else None
     with open(path, "w") as out:
         out.write("".join(f"v {x:.3f} {y:.3f} {z:.3f}\n" for x, y, z in v))
-        if with_uv:
+        if vt is not None:
             out.write("".join(f"vt {a:.5f} {b:.5f}\n" for a, b in vt))
         out.write("".join(f"vn {x:.4f} {y:.4f} {z:.4f}\n" for x, y, z in vn))
         for a, b, c in f + 1:
-            out.write(f"f {a}/{a}/{a} {b}/{b}/{b} {c}/{c}/{c}\n" if with_uv else f"f {a}//{a} {b}//{b} {c}//{c}\n")
+            out.write(f"f {a}/{a}/{a} {b}/{b}/{b} {c}/{c}/{c}\n" if vt is not None else f"f {a}//{a} {b}//{b} {c}//{c}\n")
 
 
-def write(found, photo, raster, scene_dir, wall_colours):
-    """Write every building's meshes and roof photo. Returns manifest assets."""
-    os.makedirs(os.path.join(scene_dir, "buildings"), exist_ok=True)
+def write(found, photo, raster, scene_dir, wall_colours, log=print):
+    """Write every building's meshes and pictures. Returns manifest assets, each with its building as "footprint"."""
+    folder = os.path.join(scene_dir, "buildings")
+    os.makedirs(folder, exist_ok=True)
+    read = facades()
     assets = []
     for n, b in enumerate(found, start=1):
-        parts = model(b)
         name = f"building_{n}"
-        write_obj(os.path.join(scene_dir, "buildings", name + "_roof.obj"), parts["roof"], True)
-        write_obj(os.path.join(scene_dir, "buildings", name + "_walls.obj"), parts["walls"], False)
-        roof = roof_photo(b, photo, raster)
-        Image.fromarray(renderer.for_renderer(roof)).save(os.path.join(scene_dir, "buildings", name + "_roof.jpg"), quality=90, optimize=True)
-        assets.append({"name": name, "parts": [
-            {"name": "roof", "mesh": f"buildings/{name}_roof.obj", "texture": f"buildings/{name}_roof.jpg", "colour": [1.0, 1.0, 1.0], "roughness_value": 0.6},
-            {"name": "walls", "mesh": f"buildings/{name}_walls.obj", "colour": renderer.colour_for_renderer(wall_colours[n - 1]), "roughness_value": 0.8},
-        ], "footprint": b})
+        style = style_of(b, read, wall_colours[n - 1])
+        made = model(b, style, photo, raster, n, log)
+        for part in ("roof", "walls", "trim"):
+            write_obj(os.path.join(folder, f"{name}_{part}.obj"), made["meshes"][part])
+        for part, picture in (("roof", made["roof_photo"]), ("walls", made["wall_photo"])):
+            Image.fromarray(renderer.for_renderer(picture)).save(os.path.join(folder, f"{name}_{part}.jpg"), quality=90, optimize=True)
+        trim = renderer.colour_for_renderer(np.asarray(style.get("trim", facade.WHITE), float) / 255)
+        parts = [{"name": "roof", "mesh": f"buildings/{name}_roof.obj", "texture": f"buildings/{name}_roof.jpg", "colour": [1.0, 1.0, 1.0], "roughness_value": 0.6},
+                 {"name": "walls", "mesh": f"buildings/{name}_walls.obj", "texture": f"buildings/{name}_walls.jpg", "colour": [1.0, 1.0, 1.0], "roughness_value": 0.8},
+                 {"name": "trim", "mesh": f"buildings/{name}_trim.obj", "colour": [round(c, 3) for c in trim], "roughness_value": 0.7}]
+        for part, (v, f) in made["extras"].items():
+            railmodel.write_obj(os.path.join(folder, f"{name}_{part}.obj"), v, f)
+            parts.append({"name": part, "mesh": f"buildings/{name}_{part}.obj", "roughness_value": 0.7,
+                          "colour": [round(c, 3) for c in renderer.colour_for_renderer(np.asarray(EXTRAS[part], float) / 255)]})
+        log(f"  {name}" + (f" ({style['name']})" if style.get("name") else "") + f": {2 * b['half_length']:.1f} x {2 * b['half_width']:.1f} m, eave {b['eave']:.1f} m,"
+            f" ridge {b['ridge']:.1f} m, {made['walls']} walls, {made['features']} doors, windows and the like")
+        assets.append({"name": name, "parts": parts, "footprint": b})
     return assets

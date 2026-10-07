@@ -72,17 +72,27 @@ def main():
 
     inside = 0
     for b in [i for i in doc["instances"] if i["group"] == "Buildings"]:
-        walls, _ = read_obj(os.path.join(scene, f"buildings/{b['name']}_walls.obj"))
-        corners = np.unique(walls[:, :2].round(3), axis=0)
-        c = np.array(b["centre"])
-        far = corners[np.argsort(-np.hypot(*(corners - c).T))[:4]]
-        u = next((q - far[0]) / np.hypot(*(q - far[0])) for q in far[1:] if abs(np.hypot(*(q - far[0])) - b["length"]) < 0.05)
-        w = np.array([-u[1], u[0]])
+        c, u = np.array(b["centre"]), np.array(b["axis"])
         p = np.array([t["pos"][:2] for t in trees]) - c
-        inside += int(((np.abs(p @ u) < b["length"] / 2) & (np.abs(p @ w) < b["width"] / 2)).sum())
+        along, across = p @ u, p @ np.array([-u[1], u[0]])
+        for u0, u1, low, high in b["plan"]:
+            inside += int(((along > u0) & (along < u1) & (across > low) & (across < high)).sum())
     print(f"{inside} trunks inside a building")
     if inside:
         failed.append("trees inside buildings")
+
+    # Nor in a tank or a yard of plant: each small structure says what ground it covers.
+    trunks = np.array([t["pos"][:2] for t in trees])
+    within = 0
+    for item in [i for i in doc["instances"] if i["group"] == "Props" and "outline" in i]:
+        ring = np.array(item["outline"])
+        ahead = np.roll(ring, -1, axis=0) - ring
+        # An outline is a convex ring, anticlockwise: a point inside is to the left of every edge.
+        left = ahead[None, :, 0] * (trunks[:, None, 1] - ring[None, :, 1]) - ahead[None, :, 1] * (trunks[:, None, 0] - ring[None, :, 0])
+        within += int(((left > 0).all(1) | (left < 0).all(1)).sum())
+    print(f"{within} trunks inside a small structure")
+    if within:
+        failed.append("trees inside small structures")
 
     cones = [i for i in doc["instances"] if i["group"] == "Cones"]
     off = sum(distance_to_road(np.array(c["pos"][:2])) > 0.3 for c in cones)

@@ -20,6 +20,10 @@ PyChrono. Nothing is converted and Chrono is not modified.
 | The lattice tower | The swing gates, open |
 | ![Two accessible stalls with their symbols and a hatched aisle](docs/gallery/accessible.jpg) | ![Boulders and a line of stones beside the entrance](docs/gallery/rocks.jpg) |
 | The accessible stalls | Boulders at the entrance |
+| ![The main building: steel cladding, a stone front, windows and an entrance canopy](docs/gallery/main.jpg) | ![A two-tone steel shed with a roll-up door, guard posts and propane tanks beside it](docs/gallery/shed.jpg) |
+| The main building | The shed |
+| ![A white trailer with a wooden deck, ramps and handrails](docs/gallery/trailer.jpg) | ![Heating and cooling plant behind screen walls, and a transformer](docs/gallery/yard.jpg) |
+| The trailer and its deck | The plant yards behind the main building |
 
 All of these are stock Chrono::VSG, drawn by `tools/look.py` from the scene the script downloads.
 
@@ -31,7 +35,7 @@ curl -LO https://raw.githubusercontent.com/ksha23/chrono-columbus-speedway/main/
 python speedway.py
 ```
 
-The first run downloads the scene (94 MB) into `scene/` beside the script, checks its
+The first run downloads the scene (95 MB) into `scene/` beside the script, checks its
 SHA-256 and unpacks it. Later runs start in a few seconds.
 
 Hold **W** to accelerate and **S** to brake, and hold **A** or **D** to steer. Let go and the car
@@ -107,7 +111,7 @@ works directly with `RigidTerrain::AddPatch`, and so do `speedway_road.obj` and
 ## What is in the scene
 
 ```
-speedway_scene.json    manifest: 168 assets, 1,208 placements in 12 groups
+speedway_scene.json    manifest: 176 assets, 1,208 placements in 12 groups
 speedway_ground.obj    the ground as one welded collision mesh, 643,958 triangles
 speedway_road.obj      the pavement's 78,700 of those triangles
 speedway_terrain.obj   the other 565,258
@@ -116,14 +120,15 @@ textures/standard/     ground photo at 5 cm per pixel, one JPEG per tile
 textures/low/          the same at 10 cm
 textures/surround.jpg  aerial imagery for the land beyond the scan
 trees/                 54 generated tree models, wood and leaves apart
-buildings/             4 buildings, walls and textured roof apart
+buildings/             4 buildings: a roof with its photograph, walls with their painted
+                       picture, the roof's trim, and a canopy and guard posts where there are any
 cones/                 one traffic cone, body and base apart
 poles/                 light poles, one model per height
 vehicles/              parked cars: 3 models made from the vehicle meshes Chrono ships
 barriers/              guard rails, the fence round the property and two swing gates,
                        each built in place
-props/                 one block, placed and sized for each small structure, and the
-                       lattice tower
+props/                 the small structures, each built in place: tanks, a shed, a deck with
+                       its ramps, a yard of plant. And the lattice tower
 rocks/                 rock piles and boulders, each built in place
 markings/              road paint as one mesh per colour (yellow, white, and the blue of
                        the accessible-parking symbols) and strokes.json.
@@ -179,7 +184,7 @@ To fetch the scene without the script:
 
 ```sh
 curl -LO https://github.com/ksha23/chrono-columbus-speedway/releases/download/v5/speedway_scene_base.tar.gz
-echo "fb71f9537b78a1459f7ef0499b8f1c58f43eee791c196ca8f0f0933cbc466b02  speedway_scene_base.tar.gz" | shasum -a 256 -c
+echo "0efd6beae666614acbe2630e7f2b325ac3726133193db8951a7feeb4a66e11fd  speedway_scene_base.tar.gz" | shasum -a 256 -c
 mkdir scene && tar -xzf speedway_scene_base.tar.gz -C scene
 ```
 
@@ -248,7 +253,7 @@ it stands and how big it is. The rest is a model.
 | 7 parked vehicles | car-sized things 1.4 to 2.5 m tall on pavement. Colour from the photo, and the front is the lower end | a sedan, a hatchback or an SUV made from the vehicle meshes Chrono ships, in that colour, tilted to stand on its four wheels where the ground slopes |
 | 609 m of guard rail in 6 pieces | thin lines of galvanised steel, bluer than what they lie on, where the scan shows something under a metre tall | a W-beam on posts, facing the road |
 | the fence, 1,581 m | the same, away from pavement. It shows for 616 m and is carried on between those stretches, since it runs round the whole property. One gate, at the entrance | posts, a top rail and two wires |
-| 5 small structures | colourless, even-topped things up to 3.5 m tall: tanks, a hut, bleachers | a block of the footprint, height and colour measured |
+| 9 small structures | where each stands, its size and its colour by a program: colourless, even-topped things up to 3.5 m tall. What kind of thing each is, by hand: see below | two propane tanks on saddles, a fuel tank in a kerbed basin with its guard posts, a shed, a transformer, the deck and ramps with handrails along the trailer and a storage box beside it, the heating and cooling plant behind its screen walls, two pipes on trestles |
 | 24 rock piles and boulders | ground with no colour whose lightness changes from stone to stone, where concrete is one even tone. A boulder on its own by the shading across its top and the hard shadow beside it | rough stones dropped over the same patch, each settled into the ground or into the ones under it, 866 in all, in three shades of the colour the photo gives. No pile is built higher than the scan shows it standing |
 | a lattice tower, 32 m tall | measured by hand: see below. Height from where its shadow ends | four legs, rings and cross braces of galvanised steel, with a small wind turbine at the top, which is what its shadow shows there |
 | two swing gates | measured by hand. Height from the length of the posts' shadows | a tubular leaf on a hinge post, swung open along the verge, and the rail on posts that runs off from it |
@@ -262,6 +267,16 @@ shadow ends. The measurements are in `tools/landmarks.json`. Heights are not amo
 follow from the shadows and the sun, as a light pole's does. The tower's picture is a
 foreshortened lattice lying on the grass with a shadow 48 m long beside it, and both are
 painted out like anything else that stood on the ground.
+
+**What each small structure is was read by hand too.** The program that finds them says where
+a small man-made thing stands, which way it lies, how big it is and what colour. It cannot say
+what it is: a white lump four metres long is a block to it whether it is a propane tank or a
+freezer. That one fact for each is in `tools/structures.json`, with whatever else of it the
+program could not measure: a tank's diameter, which end of the shed is the high one, where the
+guard posts stand. Three things are not one lump, so the program does not find them, and they
+are in that file whole: the deck and ramps beside the trailer, the plant yard behind the main
+building, and a rack of pipes. The survey had taken 4 of these structures for trees,
+and those trees are left out.
 
 **Road paint is drawn, not photographed.** In the ground's picture a lane line is two texels
 wide, and from a car, at a shallow angle, the renderer's texture filtering smears it away.
@@ -384,18 +399,31 @@ None of the three argues with ground the photo shows plainly. A wedge of mown gr
 two roads is a notch in the pavement in every way but that one, and it stays.
 
 **Trees are generated.** 535 crowns are measured in the scan. A crown too wide to be one tree
-is replanted as several, which gives 949 trees. Each is a generated model chosen by its shape
+is replanted as several, which gives 945 trees. Each is a generated model chosen by its shape
 (broadleaf, upright, willow, shrub), stretched to the measured height and crown width, and
 coloured with the leaf colour the drone saw. No tree reaches over the pavement: one whose crown
 would is stepped back from the road by up to 4 m, and whatever still crosses the edge is taken
 off its width. Real crowns do hang over these roads, but a generated tree does not know to
-grow up and over a lane, and its branches would hang in it at windscreen height. The 422 trees whose crowns come within 12 m of pavement get the full model,
+grow up and over a lane, and its branches would hang in it at windscreen height. The 418 trees whose crowns come within 12 m of pavement get the full model,
 up to 7,000 triangles. The other 527 get one with 40% of the triangles, because stock
 Chrono::VSG draws every triangle of every tree again for each shadow map. An earlier build
 with every tree at full detail ran at 16 frames a second on an M4 Pro. This one holds 47 to 50.
 
-**Buildings are refitted** as a rectangle with straight walls and a gable roof, from the scan's
-roof heights. The roof keeps its own photograph. The walls get one flat colour.
+**Buildings are rebuilt from their roofs.** A roof is the one part of a building a drone sees
+well. Its outline is the building's plan: a rectangle, with square steps where a wing stands
+out, as the main building's does. Its heights are the two slopes of a gable, and the ridge is
+where they meet, which is not always the middle. The walls stand under the roof's edge. The
+roof keeps its own photograph, and it has an edge and an underside, since from the ground the
+edge is most of what shows.
+
+The walls are painted, not photographed. The scan has each wall as a smear, which is still
+enough to read what the wall is clad in, what colour it is, and where the bright rectangle of
+a door or the dark one of a window sits. Those facts were read by hand, 44 of them, and
+are kept in `tools/facades.json`: ribbed steel, lap boards or stone, the roll-up doors at both
+ends of the shed with their guard posts, the canopy over the main building's entrance. Each
+wall is then drawn clean from them. `tools/facade_views.py` draws what they were read from:
+every wall as the scan has it, with a metre grid. A building the file does not name gets plain
+walls in the colour the scan shows.
 
 ### The renderer
 
@@ -435,9 +463,20 @@ line on the finished ground from above and circles each kink left in an edge lin
 
 ## What is not right
 
-- **Buildings are boxes.** No doors, windows or wall detail, and the wall colour is a guess
-  from the little the drone saw of them. The tanks, the hut and the bleachers are plainer
-  still: one block each.
+- **Building walls are drawn from a few facts, not photographed.** Each has the cladding and
+  colour the scan shows and its doors and windows where the scan shows them, to a few tenths
+  of a metre. What the drone did not see is plain or assumed: the shed's north-west side is
+  given the daylight strips of its south-east side, the garage's two wide doors are fitted to
+  the foot of the one that shows, the door between the two plant yards is put where the walk
+  leads, and the trailer's far side has no windows. Lights, signs, gutters and downpipes are
+  left out. The canopy over the main entrance is a guess at a shape the scan shows only from
+  above.
+- **The small structures are right in kind and size, and ordinary in detail.** A tank has the
+  length and diameter the scan shows, on saddles and with a valve dome of the usual shape. The
+  deck's platforms and ramps are where the photo has them and at the levels the scan gives, but
+  its handrails are a guess at height and spacing, since the scan's are a blur. The plant in
+  the yard is boxes with fan rings behind plain screen walls. The shed's door is on the side
+  it is most likely on.
 - **Road paint is found by a program, and it misses some.** Most of the small ruler ticks on
   the skid pad and the odd dash. Stall lines are drawn at their row's full length, so a line
   that really is shorter than its neighbours is not, and a row is assumed to have a line at
@@ -473,6 +512,14 @@ line on the finished ground from above and circles each kink left in an edge lin
   model assumes a road keeps its width over 30 m, and that it is as wide on one side of its
   centre line as on the other wherever one side was in shade. 16 small kinks are
   left in the edge lines, the sharpest 25 degrees, at a corner where two roads meet.
+- **Some trees are far taller than what stands there.** One crown in the survey is not a
+  crown. It is every scrap of greenery too low or too thin to have a top of its own, all over
+  the site, under one label: reeds on a pond bank, brush on a verge, and the stray high points
+  that are all the scan made of some real trees. Each of the 194 trees planted in it is given
+  at least 10.5 m, six tenths of the label's tallest point, wherever it lands. 81 of them
+  stand where the scan shows nothing 3 m tall within 2 m. Giving each the height the scan shows
+  at its own spot would fix those and would also shrink the woods the scan read too low, so
+  it wants a look at the photo, place by place.
 - **Some trees are only a picture.** Where the scan could not build a crown it printed the
   crown flat on the ground under it. There is no height to find, so no tree is planted and
   the picture stays, as a dark green patch on the verge. Where such a crown lay over a road
@@ -503,7 +550,7 @@ line on the finished ground from above and circles each kink left in an edge lin
 ## Tested with
 
 PyChrono 10.0.0 from the `projectchrono` channel, conda build `py313_1187`, on macOS (Apple
-silicon). On an M4 Pro the demo holds real time at FPS frames a second with shadows on (50 is
+silicon). On an M4 Pro the demo holds real time at 47 to 50 frames a second with shadows on (50 is
 the script's cap). It uses 4.8 GB of memory, or 3.6 GB with `--textures low`. Linux
 and Windows have not been tried.
 

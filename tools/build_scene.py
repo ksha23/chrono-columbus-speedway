@@ -22,11 +22,11 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import blocks  # noqa: E402
 import buildings  # noqa: E402
 import carmodels  # noqa: E402
 import cone_model  # noqa: E402
 import cones  # noqa: E402
+import footprint  # noqa: E402
 import forest  # noqa: E402
 import ground  # noqa: E402
 import groundphoto  # noqa: E402
@@ -42,6 +42,7 @@ import renderer  # noqa: E402
 import rockmodel  # noqa: E402
 import tiles  # noqa: E402
 import transform  # noqa: E402
+import structures  # noqa: E402
 import treegen  # noqa: E402
 import vehicles  # noqa: E402
 import wall_colour  # noqa: E402
@@ -130,26 +131,32 @@ def main():
         b = asset.pop("footprint")
         assets.append(asset)
         instances.append({"asset": len(assets) - 1, "group": "Buildings", "name": asset["name"], "pos": [0.0, 0.0, 0.0], "rot": [1.0, 0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0],
-                          "centre": b["centre"], "length": round(2 * b["half_length"], 2), "width": round(2 * b["half_width"], 2),
-                          "eave_height": round(b["eave"], 2), "ridge_height": round(b["ridge"], 2)})
-        print(f"  {asset['name']}: {2 * b['half_length']:.1f} x {2 * b['half_width']:.1f} m, eave {b['eave']:.1f} m, ridge {b['ridge']:.1f} m,"
-              f" walls {tuple(round(c, 2) for c in walls[len(instances) - len(parts) - 1])}")
+                          "centre": b["centre"], "axis": b["axis"], "length": round(2 * b["half_length"], 2), "width": round(2 * b["half_width"], 2),
+                          "plan": b["plan"], "eave_height": round(b["eave"], 2), "ridge_height": round(b["ridge"], 2)})
 
     # Trees: generated models planted where the scan measured crowns.
     measured = json.load(open(os.path.join(args.work, "trees.json")))
     k = int(round(cell / raster["res"]))
     h, w = obj["height"].shape
     small = np.stack([np.asarray(raw[..., ch], dtype=np.float32)[:h * k, :w * k].reshape(h, k, w, k).mean((1, 3)) for ch in range(3)], -1)
-    # A building is drawn as the rectangle fitted to it, which covers more ground than its roof
-    # did where the real plan is an L. Trees keep out of the rectangle, with a metre to spare.
+    # Trees keep a metre clear of every building's plan as it is drawn.
     footprints = obj["buildings"].copy()
+    not_trees = obj["buildings"].copy()
     for b in found:
         u = np.array(b["axis"])
         along = (gx - b["centre"][0]) * u[0] + (gy - b["centre"][1]) * u[1]
         across = -(gx - b["centre"][0]) * u[1] + (gy - b["centre"][1]) * u[0]
-        footprints |= (np.abs(along) < b["half_length"] + 1.0) & (np.abs(across) < b["half_width"] + 1.0)
+        footprints |= footprint.covers(b["plan"], along, across, margin=1.0)
+        not_trees |= footprint.covers(b["plan"], along, across)
+    # The survey takes anything tall that is not a roof for a tree, and a tank or a yard of
+    # plant is both. A tree it found in one of those, or under a roof's edge, is the thing
+    # itself and is left out. And no tree is moved into one.
+    if "blocks" not in args.without.split(","):
+        grid = (float(obj["x0"]), float(obj["y1"]), cell, footprints.shape)
+        not_trees |= structures.cover(things["blocks"], *grid, margin=1.0, whole=True)
+        footprints |= not_trees
     library, placements = forest.plan(measured, obj["crowns"], obj["height"], small, objects.water(ref, gx, gy), masks["paved"], footprints,
-                                      (float(obj["x0"]), float(obj["y1"]), cell), ref)
+                                      (float(obj["x0"]), float(obj["y1"]), cell), ref, not_trees=not_trees, log=print)
     os.makedirs(os.path.join(args.scene, "trees"), exist_ok=True)
     used = {p["model"] for p in placements}
     index, budget = {}, {}
@@ -229,18 +236,15 @@ def main():
                               "scale": [size, size, size], "colours": paint})
         print(f"[{time.perf_counter() - start:5.1f} s] {len(things['vehicles'])} parked vehicles: " + ", ".join(i["model"] for i in instances if i["group"] == "Vehicles"))
 
-    # Small structures, each a block of the size and colour the scan gives it.
-    if things["blocks"]:
-        os.makedirs(os.path.join(args.scene, "props"), exist_ok=True)
-        blocks.write_unit(os.path.join(args.scene, "props", "block.obj"))
-        assets.append({"name": "block", "parts": [{"name": "block", "mesh": "props/block.obj", "colour": [0.8, 0.8, 0.8], "roughness_value": 0.8}]})
-        for n, b in enumerate(things["blocks"]):
-            instances.append({"asset": len(assets) - 1, "group": "Props", "name": f"block_{n:02d}",
-                              "pos": [round(b["x"], 2), round(b["y"], 2), round(float(ref.elevation(b["x"], b["y"])), 3)],
-                              "rot": [round(float(np.cos(b["yaw"] / 2)), 5), 0.0, 0.0, round(float(np.sin(b["yaw"] / 2)), 5)],
-                              "scale": [b["length"], b["width"], b["height"]],
-                              "colours": {"block": [round(v, 3) for v in renderer.colour_for_renderer(b["colour"])]}})
-        print(f"[{time.perf_counter() - start:5.1f} s] {len(things['blocks'])} small structures as blocks")
+    # Small structures. What kind of thing each is was read by hand (structures.json), and each
+    # is built as that. One nobody named is a block of the size and colour the scan gives it.
+    if "blocks" not in args.without.split(","):
+        added, placed_things = structures.build(things["blocks"], ground_height, args.scene, renderer.colour_for_renderer, print)
+        for item in placed_things:
+            item["asset"] += len(assets)
+        assets += added
+        instances += placed_things
+        print(f"[{time.perf_counter() - start:5.1f} s] {len(placed_things)} small structures")
 
     # Guard rails and fence, each built in place along the line it was found on.
     if things["barriers"]:
@@ -346,7 +350,7 @@ def main():
         print(f"[{time.perf_counter() - start:5.1f} s] {len(found_cones)} cones, {triangles} triangles each")
 
     manifest = {
-        "version": 5,
+        "version": 6,
         "name": "Columbus 151 Speedway",
         "frame": {
             "description": "x east, y north, z up, metres. z is elevation above sea level (NAVD88).",

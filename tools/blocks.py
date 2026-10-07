@@ -1,8 +1,8 @@
-"""Find the small man-made things that stand about the site: tanks, a hut, bleachers.
+"""Find the small man-made things that stand about the site: tanks, a shed, a deck.
 
-They are too few and too varied to have a model each. What can be said of each from the scan
-is where it stands, its footprint, its height and its colour, and that is what it is given
-back as: a block of that size and colour. It is the same bargain as the buildings.
+What can be said of each from the scan is where it stands, its footprint, its height and its
+colour. What kind of thing it is cannot be, and structures.py takes that from a list read by
+hand. One the list does not name is given back as a block of the size and colour found here.
 
 Telling them from brush is the hard part, since a pile of dead branches is as tall and as grey.
 Man-made things are colourless and even on top, and brush is neither.

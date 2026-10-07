@@ -37,9 +37,9 @@ import urllib.request
 
 # The published scene: one pinned archive, checked against its hash before anything is unpacked,
 # so a changed or truncated download fails here and not later as a half-loaded scene.
-RELEASE = "https://github.com/ksha23/chrono-columbus-speedway/releases/download/v5/"
+RELEASE = "https://github.com/ksha23/chrono-columbus-speedway/releases/download/v6/"
 SCENE_URL = RELEASE + "speedway_scene_base.tar.gz"
-SCENE_SHA256 = "fb71f9537b78a1459f7ef0499b8f1c58f43eee791c196ca8f0f0933cbc466b02"
+SCENE_SHA256 = "0efd6beae666614acbe2630e7f2b325ac3726133193db8951a7feeb4a66e11fd"
 SCENE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scene")
 
 MANIFEST = "speedway_scene.json"
@@ -64,14 +64,14 @@ OPTIONAL = [
     ("poles", "Poles", "the light poles"),
     ("vehicles", "Vehicles", "the parked vehicles"),
     ("barriers", "Barriers", "the guard rails, the fence and the swing gates"),
-    ("props", "Props", "the small structures: tanks, a hut, bleachers, the lattice tower"),
+    ("props", "Props", "the small structures: tanks, a shed, a deck, a yard of plant, the lattice tower"),
     ("rocks", "Rocks", "the rock piles and boulders"),
     ("markings", "Markings", "the road paint, for bare concrete to lay out lanes of your own"),
     ("edge-lines", "EdgeLines", "the white lines along the road edges. They are an addition: the real track has none"),
 ]
 
 # The scene format this script expects. fetch() replaces an older scene it installed itself.
-SCENE_VERSION = 5
+SCENE_VERSION = 6
 
 # Where the car starts if the scene does not say: x, y in metres and yaw in radians. The site
 # keeps its real elevation, so the ground is near z = 295 m and not z = 0.

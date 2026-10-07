@@ -187,17 +187,27 @@ def clear_of_road(trees, paved, keep_out, x0, y1, cell):
     return moved, narrowed
 
 
-def plan(trees, crowns, height, small_photo, water, paved, buildings, grid, ref, seed=0):
+def plan(trees, crowns, height, small_photo, water, paved, buildings, grid, ref, seed=0, not_trees=None, log=print):
     """Return (library entries to generate, placements).
 
     grid is (x0, y1, cell) of the crown grid. water, paved and buildings are boolean masks on
     it. A library entry is (name, kind, height, radius, seed, triangles). A placement is a dict
     ready for the manifest, with "model" naming its library entry.
+
+    not_trees is a mask of ground where a tree the survey found is not one: it is the thing
+    that stands there, a tank or a yard of plant. Such a tree is left out. Every other tree
+    comes out exactly as it would without the mask, name and all.
     """
     rng = np.random.default_rng(seed)
     x0, y1, cell = grid
     colours = leaf_colours(trees, crowns, small_photo)
     trees = [t for t in split_clumps(trees, crowns, height, x0, y1, cell, rng) if t["id"] in colours]
+    if not_trees is not None:
+        for t in trees:      # judged where the survey found it, before anything moves it
+            t["gone"] = bool(not_trees[int(np.clip((y1 - t["y"]) / cell, 0, crowns.shape[0] - 1)), int(np.clip((t["x"] - x0) / cell, 0, crowns.shape[1] - 1))])
+        gone = [t for t in trees if t["gone"]]
+        log(f"  {len(gone)} of the survey's trees stand in a small structure or under a roof's edge, and are left out: "
+            + ", ".join(f"({t['x']:.0f}, {t['y']:.0f})" for t in gone))
     index, centres = palette(colours, PALETTE, rng)
     off_the_road(trees, paved | buildings, x0, y1, cell)
     clear_of_road(trees, paved, paved | buildings, x0, y1, cell)
@@ -223,11 +233,14 @@ def plan(trees, crowns, height, small_photo, water, paved, buildings, grid, ref,
         which = min(fits, key=lambda m: abs(np.log((t["height"] / radius) / (LIBRARY[m][1] / LIBRARY[m][2]))))
         h, r = LIBRARY[which][1], LIBRARY[which][2]
         yaw = rng.uniform(0, 2 * np.pi)
+        variant = int(rng.integers(SEEDS))
+        if t.get("gone"):
+            continue
         leaf = renderer.colour_for_renderer(centres[index[t["id"]]])
         # A crown reaches toward the road, so distance is measured from its edge, not its trunk.
         near = from_pavement[row, col] - radius < NEAR
         placements.append({
-            "model": f"{kind}_{which}_{int(rng.integers(SEEDS))}" + ("" if near else "_light"), "group": "Trees", "name": f"tree_{n:04d}", "kind": kind,
+            "model": f"{kind}_{which}_{variant}" + ("" if near else "_light"), "group": "Trees", "name": f"tree_{n:04d}", "kind": kind,
             "pos": [round(t["x"], 2), round(t["y"], 2), round(float(ref.elevation(t["x"], t["y"])), 2)],
             "rot": [round(float(np.cos(yaw / 2)), 5), 0.0, 0.0, round(float(np.sin(yaw / 2)), 5)],
             "scale": [round(radius / r, 3), round(radius / r, 3), round(t["height"] / h, 3)],
