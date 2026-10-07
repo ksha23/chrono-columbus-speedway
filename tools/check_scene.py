@@ -165,6 +165,16 @@ def main():
     if once != rim or many:
         failed.append("ground mesh is not watertight")
 
+    piles = placed("Rocks")
+    if piles:
+        # A boulder may stand on the fringe of an apron. None stands out in the pavement, with
+        # road three metres off on every side of it.
+        far = [3.0 * np.array([np.cos(t), np.sin(t)]) for t in np.arange(8) * np.pi / 4]
+        on_road = sum(all(distance_to_road(np.array(p["at"]) + r) == 0 for r in [np.zeros(2)] + far) for p in piles)
+        print(f"{len(piles)} rock piles and boulders, {sum(p['stones'] for p in piles)} stones: {on_road} out in the road")
+        if on_road:
+            failed.append("rocks on the road")
+
     # Every parked vehicle stands on its wheels: under each of the four, the tyre's lowest
     # point is on the ground mesh, not in the air above it and not sunk into it.
     if cars:

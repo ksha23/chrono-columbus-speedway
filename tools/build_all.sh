@@ -10,7 +10,8 @@
 # OUT_DIR        where the archives and SHA256SUMS are written
 #
 # PYTHON picks the interpreter. It needs numpy, scipy, Pillow and, for the cone model, PyChrono.
-# Peak memory is about 15 GB, in the shadow step. The whole run takes 26 minutes on an M4 Pro.
+# Peak memory is about 15 GB, in the shadow step. The whole run takes 19 minutes on five cores of an M4 Pro.
+# SPEEDWAY_CORES sets how many cores the photo steps use (default: all, up to 12). The result does not depend on it.
 # Every step is seeded, so the same scan and reference data give the same archive, byte for byte.
 set -e
 scan="${1:?scan directory}"; ref="${2:?reference directory}"; work="${3:?work directory}"

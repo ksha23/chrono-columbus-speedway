@@ -24,7 +24,7 @@ import pavement  # noqa: E402
 TURN = 8.0        # degrees: a turn this sharp one way...
 WITHIN = 5.0      # ...followed within this many metres by one as sharp the other way, is a kink
 CHORD = 1.0       # metres: headings are taken over chords this long, turns between neighbouring chords
-PAINT = {"yellow": (240, 190, 20), "white": (255, 255, 255), "edge": (0, 210, 255)}
+PAINT = {"yellow": (240, 190, 20), "white": (255, 255, 255), "blue": (40, 80, 200), "edge": (0, 210, 255)}
 
 
 def resample(points, spacing):

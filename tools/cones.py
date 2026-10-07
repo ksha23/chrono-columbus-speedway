@@ -8,6 +8,8 @@ cone stood and what colour it was. The length of the shadow says how tall it was
 import numpy as np
 from scipy import ndimage
 
+import parallel
+
 MARGIN = 1.0          # metres beyond the pavement's edge still searched
 MIN_AREA, MAX_AREA = 0.0075, 0.8   # square metres of coloured patch that can be one cone
 # Hue range in degrees, then the least saturation and brightness that count. The green cones
@@ -42,11 +44,12 @@ def coloured_patches(photo, raster, search_cells, cell):
     H, W = photo.shape[:2]
     mask = np.zeros((H, W), bool)
     kind = np.zeros((H, W), np.uint8)
-    for r0 in range(0, H, 2048):
+
+    def band(r0):
         r1 = min(r0 + 2048, H)
         a, b = r0 // k, min((r1 + k - 1) // k, search_cells.shape[0])
         if not search_cells[a:b].any():
-            continue
+            return
         where = np.repeat(np.repeat(search_cells[a:b], k, axis=0), k, axis=1)[r0 - a * k:r1 - a * k, :W]
         where = np.pad(where, ((0, 0), (0, W - where.shape[1])))
         hue, sat, val = hue_sat(np.asarray(photo[r0:r1], dtype=np.float32) / 255)
@@ -55,6 +58,8 @@ def coloured_patches(photo, raster, search_cells, cell):
             hit = where & in_range & (sat > min_sat) & (val > min_val) & (kind[r0:r1] == 0)
             mask[r0:r1] |= hit
             kind[r0:r1][hit] = n
+
+    parallel.each(band, range(0, H, 2048), most=6)      # each band has its own rows: side by side
     # A green cone is a bright rim around a dark middle: close the rim and count the middle in.
     return ndimage.binary_fill_holes(ndimage.binary_closing(mask, iterations=2)), kind
 

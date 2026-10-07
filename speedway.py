@@ -37,9 +37,9 @@ import urllib.request
 
 # The published scene: one pinned archive, checked against its hash before anything is unpacked,
 # so a changed or truncated download fails here and not later as a half-loaded scene.
-RELEASE = "https://github.com/ksha23/chrono-columbus-speedway/releases/download/v4/"
+RELEASE = "https://github.com/ksha23/chrono-columbus-speedway/releases/download/v5/"
 SCENE_URL = RELEASE + "speedway_scene_base.tar.gz"
-SCENE_SHA256 = "aec0c430eff2424e7f6b2a8e30405a45b1f933ef70ef505b01f40a6ca407c5fa"
+SCENE_SHA256 = "fb71f9537b78a1459f7ef0499b8f1c58f43eee791c196ca8f0f0933cbc466b02"
 SCENE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scene")
 
 MANIFEST = "speedway_scene.json"
@@ -55,7 +55,7 @@ MARKER = ".speedway-scene"
 TEXTURES = {"low": 0.10, "standard": 0.05}
 
 # What the scenery is made of. add_scenery(groups=...) takes any of these.
-GROUPS = ["Road", "Terrain", "Buildings", "Trees", "Cones", "Poles", "Vehicles", "Barriers", "Props", "Markings", "EdgeLines"]
+GROUPS = ["Road", "Terrain", "Buildings", "Trees", "Cones", "Poles", "Vehicles", "Barriers", "Props", "Rocks", "Markings", "EdgeLines"]
 
 # The groups the demo can leave out, each with a --no-... option: option, group, what it is.
 OPTIONAL = [
@@ -63,14 +63,15 @@ OPTIONAL = [
     ("cones", "Cones", "the traffic cones"),
     ("poles", "Poles", "the light poles"),
     ("vehicles", "Vehicles", "the parked vehicles"),
-    ("barriers", "Barriers", "the guard rails and the fence"),
-    ("props", "Props", "the small structures: tanks, a hut, bleachers"),
+    ("barriers", "Barriers", "the guard rails, the fence and the swing gates"),
+    ("props", "Props", "the small structures: tanks, a hut, bleachers, the lattice tower"),
+    ("rocks", "Rocks", "the rock piles and boulders"),
     ("markings", "Markings", "the road paint, for bare concrete to lay out lanes of your own"),
     ("edge-lines", "EdgeLines", "the white lines along the road edges. They are an addition: the real track has none"),
 ]
 
 # The scene format this script expects. fetch() replaces an older scene it installed itself.
-SCENE_VERSION = 4
+SCENE_VERSION = 5
 
 # Where the car starts if the scene does not say: x, y in metres and yaw in radians. The site
 # keeps its real elevation, so the ground is near z = 295 m and not z = 0.

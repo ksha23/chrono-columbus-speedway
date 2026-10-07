@@ -12,6 +12,7 @@ A joint or a tyre mark running across that is left alone.
 import numpy as np
 from scipy import ndimage
 
+import parallel
 import pavement
 
 RUN = 3.0                    # metres of straight line needed
@@ -34,19 +35,28 @@ def depth_map(photo, raster, kinds):
     k = int(round(pavement.RES / raster["res"]))
     h, w = kinds[0].shape
     lum = np.zeros((h, w), np.float32)
-    for r0 in range(0, h, 512):
+
+    def band(r0):
         r1 = min(r0 + 512, h)
         block = np.asarray(photo[r0 * k:r1 * k, :w * k], dtype=np.float32).reshape(r1 - r0, k, w, k, 3).mean((1, 3))
         lum[r0:r1] = block @ np.array([0.30, 0.59, 0.11], np.float32)
+
+    parallel.each(band, range(0, h, 512))
     sigma = TONE / pavement.RES
     depth = np.ones((h, w), np.float32)
-    for kind in kinds:
-        weight = kind.astype(np.float32)
-        tone = ndimage.gaussian_filter(lum * weight, sigma) / np.maximum(ndimage.gaussian_filter(weight, sigma), 1e-3)
-        # Again without the dark cells themselves, so a shadow does not pull its own reference down.
-        weight = (kind & (lum > 0.88 * tone)).astype(np.float32)
-        seen = ndimage.gaussian_filter(weight, sigma)
-        tone = np.where(seen > 0.05, ndimage.gaussian_filter(lum * weight, sigma) / np.maximum(seen, 1e-3), tone)
+
+    def blurred(pictures):
+        return parallel.each(lambda picture: ndimage.gaussian_filter(picture, sigma), pictures, most=4)
+
+    weights = [kind.astype(np.float32) for kind in kinds]
+    first = blurred([picture for weight in weights for picture in (lum * weight, weight)])
+    tones = [first[2 * n] / np.maximum(first[2 * n + 1], 1e-3) for n in range(len(kinds))]
+    # Again without the dark cells themselves, so a shadow does not pull its own reference down.
+    weights = [(kind & (lum > 0.88 * tone)).astype(np.float32) for kind, tone in zip(kinds, tones)]
+    second = blurred([picture for weight in weights for picture in (weight, lum * weight)])
+    for n, kind in enumerate(kinds):
+        seen = second[2 * n]
+        tone = np.where(seen > 0.05, second[2 * n + 1] / np.maximum(seen, 1e-3), tones[n])
         depth[kind] = np.clip(1.0 - lum[kind] / np.maximum(tone[kind], 1.0), -1.0, 1.0)
     return depth
 
@@ -61,7 +71,8 @@ def line_score(depth, azimuths):
     run = int(round(RUN / pavement.RES))
     side = int(round(SIDE / pavement.RES))
     best = np.full(depth.shape, -1.0, np.float32)
-    for azimuth in azimuths:
+
+    def one(azimuth):
         # Turn the picture so that a line pointing at this azimuth runs along the rows.
         turned = ndimage.rotate(depth, azimuth - 90.0, order=1, reshape=True, mode="constant", cval=1.0)
         along = ndimage.uniform_filter1d(turned, run, axis=1, mode="constant", cval=1.0)
@@ -69,7 +80,10 @@ def line_score(depth, azimuths):
         score = along - np.maximum(np.roll(beside, side, axis=0), np.roll(beside, -side, axis=0))
         back = ndimage.rotate(score, 90.0 - azimuth, order=1, reshape=True, mode="constant", cval=-1.0)
         r0, c0 = (back.shape[0] - depth.shape[0]) // 2, (back.shape[1] - depth.shape[1]) // 2
-        np.maximum(best, back[r0:r0 + depth.shape[0], c0:c0 + depth.shape[1]], out=best)
+        return back[r0:r0 + depth.shape[0], c0:c0 + depth.shape[1]].copy()
+
+    # A direction is a turned copy of the whole map and a few more like it: four at a time is what memory allows.
+    parallel.each_into(one, azimuths, lambda score: np.maximum(best, score, out=best), most=4)
     return best
 
 

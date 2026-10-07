@@ -30,13 +30,16 @@ import cones  # noqa: E402
 import forest  # noqa: E402
 import ground  # noqa: E402
 import groundphoto  # noqa: E402
+import landmarks  # noqa: E402
 import objects  # noqa: E402
 import polemodel  # noqa: E402
+import poles  # noqa: E402
 import railmodel  # noqa: E402
 import layout  # noqa: E402
 import markmodel  # noqa: E402
 import reference  # noqa: E402
 import renderer  # noqa: E402
+import rockmodel  # noqa: E402
 import tiles  # noqa: E402
 import transform  # noqa: E402
 import treegen  # noqa: E402
@@ -71,7 +74,7 @@ def main():
     parser.add_argument("--scan", default=None, help="the scan directory, needed to read wall colours")
     parser.add_argument("--chrono-data", default=None, help="Chrono's data directory, for the cone model (default: ask the installed PyChrono)")
     parser.add_argument("--save-photo", action="store_true", help="also write the finished ground photo and the pavement map to WORK_DIR, for audit_ground.py")
-    parser.add_argument("--without", default="", help="comma-separated kinds of thing to leave alone, out of poles, vehicles, blocks, barriers, markings, edgelines")
+    parser.add_argument("--without", default="", help="comma-separated kinds of thing to leave alone, out of poles, vehicles, blocks, barriers, landmarks, rocks, markings, edgelines")
     parser.add_argument("--keep-shadows", action="store_true", help="publish the photo with its shadows still in")
     args = parser.parse_args()
     start = time.perf_counter()
@@ -81,7 +84,12 @@ def main():
     t = transform.Transform(args.work)
     os.makedirs(args.scene, exist_ok=True)
 
-    filled, matched, things, masks, edge = groundphoto.prepare(args.work, ref, raster, deshadow=not args.keep_shadows, without=set(filter(None, args.without.split(","))))
+    def timed(message):
+        """What the photo's preparation reports, with the time each step was reached."""
+        print(f"[{time.perf_counter() - start:5.1f} s]{message if message.startswith(' ') else ' ' + message}", flush=True)
+
+    filled, matched, things, masks, edge = groundphoto.prepare(args.work, ref, raster, deshadow=not args.keep_shadows, without=set(filter(None, args.without.split(","))),
+                                                               log=timed)
     print(f"[{time.perf_counter() - start:5.1f} s] ground photo ready")
     if args.save_photo:
         np.save(os.path.join(args.work, "ground_photo.npy"), filled)
@@ -265,6 +273,35 @@ def main():
                               "seen_length": round(seen, 1), "pos": [0.0, 0.0, 0.0], "rot": [1.0, 0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]})
         print(f"[{time.perf_counter() - start:5.1f} s] barriers: {metres['guardrail']:.0f} m of guard rail, {metres['fence']:.0f} m of fence, {drawn} triangles")
 
+    # Rock piles and boulders, each a heap of stones built in place.
+    if things.get("rocks"):
+        os.makedirs(os.path.join(args.scene, "rocks"), exist_ok=True)
+        stones = drawn = 0
+        for n, rock in enumerate(things["rocks"]):
+            parts, count = rockmodel.make(rock, ground_height, n)
+            if not parts:
+                continue
+            entry = {"name": f"rocks_{n:02d}", "parts": []}
+            for shade, (v, f) in parts.items():
+                drawn += railmodel.write_obj(os.path.join(args.scene, "rocks", f"rocks_{n:02d}_{shade}.obj"), v, f)
+                colour = np.clip(np.asarray(rock["colour"], float) * rockmodel.SHADES[shade], 0.0, 1.0)
+                entry["parts"].append({"name": shade, "mesh": f"rocks/rocks_{n:02d}_{shade}.obj", "colour": [round(float(c), 3) for c in renderer.colour_for_renderer(colour)],
+                                       "roughness_value": 0.95})
+            assets.append(entry)
+            instances.append({"asset": len(assets) - 1, "group": "Rocks", "name": f"rocks_{n:02d}", "kind": rock["kind"], "stones": count,
+                              "at": [round(rock["x"], 2), round(rock["y"], 2)], "pos": [0.0, 0.0, 0.0], "rot": [1.0, 0.0, 0.0, 0.0], "scale": [1.0, 1.0, 1.0]})
+            stones += count
+        print(f"[{time.perf_counter() - start:5.1f} s] {len(things['rocks'])} rock piles and boulders: {stones} stones, {drawn} triangles")
+
+    # One-of-a-kind things measured by hand: the lattice tower and the swing gates.
+    if things.get("landmarks"):
+        added, placed_marks = landmarks.build(things["landmarks"], poles.suns(args.work), ground_height, args.scene, renderer.colour_for_renderer)
+        for item in placed_marks:
+            item["asset"] += len(assets)
+        assets += added
+        instances += placed_marks
+        print(f"[{time.perf_counter() - start:5.1f} s] landmarks: " + ", ".join(f"{i['name']} ({i['height']:g} m)" for i in placed_marks))
+
     # Road paint, as ribbons laid on the pavement.
     if things["markings"]:
         os.makedirs(os.path.join(args.scene, "markings"), exist_ok=True)
@@ -309,14 +346,14 @@ def main():
         print(f"[{time.perf_counter() - start:5.1f} s] {len(found_cones)} cones, {triangles} triangles each")
 
     manifest = {
-        "version": 4,
+        "version": 5,
         "name": "Columbus 151 Speedway",
         "frame": {
             "description": "x east, y north, z up, metres. z is elevation above sea level (NAVD88).",
             "utm_zone": layout.UTM_ZONE, "origin_easting": layout.ORIGIN_E, "origin_northing": layout.ORIGIN_N,
             "extent": [layout.SCENE_X0, layout.SCENE_Y0, layout.SCENE_X1, layout.SCENE_Y1],
         },
-        "labels": ["Road", "Terrain", "Buildings", "Trees", "Cones", "Poles", "Vehicles", "Barriers", "Props", "Markings", "EdgeLines"],
+        "labels": ["Road", "Terrain", "Buildings", "Trees", "Cones", "Poles", "Vehicles", "Barriers", "Props", "Rocks", "Markings", "EdgeLines"],
         "texture_levels": {k: layout.LEVELS[k] for k in args.levels.split(",")},
         "collision": COLLISION,
         "files": extra_files,

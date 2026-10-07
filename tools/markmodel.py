@@ -14,7 +14,7 @@ import ground
 
 LIFT = 0.02        # metres above the road: enough to win the depth test, too little to see
 STEP = 0.5         # metres between the points a ribbon follows the ground through
-COLOURS = {"yellow": (0.86, 0.70, 0.16), "white": (0.93, 0.93, 0.90)}
+COLOURS = {"yellow": (0.86, 0.70, 0.16), "white": (0.93, 0.93, 0.90), "blue": (0.20, 0.36, 0.66)}
 
 
 def _densify(points, step=STEP):
@@ -96,7 +96,7 @@ def make(strokes, ref, road=None):
             z = ground.surface(ref, edge[:, 0], edge[:, 1])
             if road is not None:
                 z = road.height(edge[:, 0], edge[:, 1], z)
-            z = z + LIFT
+            z = z + LIFT + stroke.get("raise", 0.0)       # paint on paint lies a little above it
             vertices.append(np.column_stack([edge, z]))
             n = len(path)
             for i in range(n - 1):

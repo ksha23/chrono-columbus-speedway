@@ -11,6 +11,8 @@ pavement. The ground mesh is cut along its zero line.
 import numpy as np
 from scipy import ndimage
 
+import parallel
+
 RES = 0.10            # metres per cell of the pavement map
 GAP = 45.0            # longest stretch of hidden road carried across, metres
 DIRECTIONS = 48       # line directions tried when carrying a road across a gap
@@ -64,7 +66,8 @@ def visible(photo, raster, covered_cells, blocked_cells, cell, shadow=None):
     H, W = photo.shape[0] // k, photo.shape[1] // k
     paved = np.zeros((H, W), bool)
     planted = np.zeros((H, W), bool)
-    for r0 in range(0, H, 512):
+
+    def band(r0):
         r1 = min(r0 + 512, H)
         block = np.asarray(photo[r0 * k:r1 * k, :W * k], dtype=np.float32).reshape(r1 - r0, k, W, k, 3).mean((1, 3)) / 255
         mx, mn = block.max(-1), block.min(-1)
@@ -79,6 +82,8 @@ def visible(photo, raster, covered_cells, blocked_cells, cell, shadow=None):
             shaded = np.asarray(shadow[r0 * k:r1 * k, :W * k], dtype=np.float32).reshape(r1 - r0, k, W, k).mean((1, 3)) > 40
             bluish = (block[..., 2] >= block[..., 1]) & (block[..., 2] >= block[..., 0] * 0.97)
             paved[r0:r1] |= shaded & bluish & (sat < 0.35) & (mx > 0.22)
+
+    parallel.each(band, range(0, H, 512))
     paved &= to_fine(covered_cells & ~blocked_cells, paved.shape, cell)
     # Tidy: bridge paint lines and joints, fill what stands on the pavement (cones, weeds, the
     # footprint of a parked car), and drop grey odds and ends that are not part of the network.
@@ -105,7 +110,8 @@ def carry_across(paved_cells, hidden_cells, cell, gap=None):
     state = np.where(paved_cells, 1, np.where(hidden_cells, 2, 0)).astype(np.uint8)
     limit = (GAP if gap is None else gap) / cell
     filled = np.zeros(state.shape, np.float32)
-    for angle in np.arange(DIRECTIONS) * 180.0 / DIRECTIONS:
+
+    def one(angle):
         rot = ndimage.rotate(state, angle, order=0, reshape=True, mode="constant", cval=0)
         n = rot.shape[1]
         idx = np.arange(n)[None, :]
@@ -119,7 +125,9 @@ def carry_across(paved_cells, hidden_cells, cell, gap=None):
         hit = (rot == 2) & left_paved & right_paved & ((right - left) <= limit)
         back = ndimage.rotate(hit.astype(np.float32), -angle, order=1, reshape=True, mode="constant", cval=0)
         r0, c0 = (back.shape[0] - state.shape[0]) // 2, (back.shape[1] - state.shape[1]) // 2
-        filled = np.maximum(filled, back[r0:r0 + state.shape[0], c0:c0 + state.shape[1]])
+        return back[r0:r0 + state.shape[0], c0:c0 + state.shape[1]].copy()
+
+    parallel.each_into(one, np.arange(DIRECTIONS) * 180.0 / DIRECTIONS, lambda back: np.maximum(filled, back, out=filled), most=6)
     return (filled > 0.5) & hidden_cells
 
 
@@ -142,16 +150,22 @@ def straighten(paved_cells, hidden_cells, cell):
     length = int(round(BAY / cell))
     found = np.zeros(paved_cells.shape, bool)
     solid = paved_cells.astype(np.uint8)
-    for angle in np.arange(DIRECTIONS) * 180.0 / DIRECTIONS:
+    def one(angle):
         # Turned by this angle, lines that ran at minus this angle on the map now run along rows.
         along = np.abs((edge + angle + 90.0) % 180.0 - 90.0) < ALONG
         if not (near & along).any():
-            continue
+            return None
         rot = ndimage.rotate(solid, angle, order=0, reshape=True, mode="constant", cval=0)
         closed = ndimage.minimum_filter1d(ndimage.maximum_filter1d(rot, length, axis=1), length, axis=1)
         back = ndimage.rotate(closed, -angle, order=0, reshape=True, mode="constant", cval=0)
         r0, c0 = (back.shape[0] - solid.shape[0]) // 2, (back.shape[1] - solid.shape[1]) // 2
-        found |= (back[r0:r0 + solid.shape[0], c0:c0 + solid.shape[1]] > 0) & near & along
+        return (back[r0:r0 + solid.shape[0], c0:c0 + solid.shape[1]] > 0) & near & along
+
+    def take(hit):
+        if hit is not None:
+            np.logical_or(found, hit, out=found)
+
+    parallel.each_into(one, np.arange(DIRECTIONS) * 180.0 / DIRECTIONS, take, most=6)
     return found
 
 
